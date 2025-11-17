@@ -1,0 +1,6 @@
+text,intent
+"hi there",greeting
+"i am feeling sad",mood_check
+"help me cope",coping
+"thank you",thanks
+"i want to die",suicidal

@@ -1,0 +1,286 @@
+<!doctype html>
+{% load static %}
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>MHChat — Quick Demo</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body { font-family: Arial, sans-serif; max-width:900px; margin:20px auto; }
+    header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    #messages { border:1px solid #ddd; padding:12px; height:380px; overflow:auto; background:#fafafa; margin-top:12px; }
+    .msg { margin:8px 0; padding:8px; border-radius:6px; }
+    .user { background:#fff; color:#111; border:1px solid #eee; }
+    .bot { background:#eaf3ff; color:#0b63d6; border:1px solid #d0e6ff; }
+    .system { background:#fff4e6; color:#d65b0b; border:1px solid #ffd9b3; font-style:italic; }
+    #controls { display:flex; gap:8px; margin-top:12px; align-items:center; }
+    input[type=text], input[type=password] { padding:8px; border:1px solid #ccc; border-radius:4px; }
+    button { padding:8px 12px; border-radius:6px; border:1px solid #ccc; background:#fff; cursor:pointer; }
+    #loginArea { display:flex; gap:8px; align-items:center; }
+    #status { font-size:0.9em; color:#666; }
+    small { color:#666; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>MHChat — Quick Demo</h1>
+    <div id="authControls">
+      <div id="loginArea">
+        <input id="loginUser" type="text" placeholder="username" size="10" />
+        <input id="loginPass" type="password" placeholder="password" size="10" />
+        <button id="loginBtn">Login</button>
+        <button id="logoutBtn" style="display:none">Logout</button>
+      </div>
+      <div id="status"><small id="userInfo">Not logged in</small></div>
+    </div>
+  </header>
+
+  <div style="margin-top:12px">
+    <label>Conversation ID (create in admin or click Create):</label>
+    <input id="convId" type="text" placeholder="e.g. 1" />
+    <button id="createConvBtn">Create Conversation</button>
+    <button id="loadBtn">Load</button>
+  </div>
+
+  <div id="messages" aria-live="polite"></div>
+
+  <div id="controls">
+    <input id="msgInput" type="text" style="width:70%" placeholder="Type a message..." />
+    <select id="senderSelect">
+      <option value="user">user</option>
+      <option value="bot">bot</option>
+    </select>
+    <button id="sendBtn">Send</button>
+  </div>
+
+<script>
+/* ---------- Helpers: tokens, CSRF, auth headers ---------- */
+function getCookie(name) {
+  const value = `; ${document.cookie}`;
+  const parts = value.split(`; ${name}=`);
+  if (parts.length === 2) return parts.pop().split(';').shift();
+  return null;
+}
+const csrftoken = getCookie('csrftoken');
+
+function setTokens(access, refresh) {
+  if (access) localStorage.setItem('mhchat_access', access);
+  if (refresh) localStorage.setItem('mhchat_refresh', refresh);
+}
+function clearTokens() {
+  localStorage.removeItem('mhchat_access');
+  localStorage.removeItem('mhchat_refresh');
+}
+function getAccessToken() { return localStorage.getItem('mhchat_access'); }
+function getRefreshToken() { return localStorage.getItem('mhchat_refresh'); }
+
+function authHeaders(json=true) {
+  const headers = {};
+  if (json) headers['Content-Type'] = 'application/json';
+  const token = getAccessToken();
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  else if (csrftoken) headers['X-CSRFToken'] = csrftoken;
+  return headers;
+}
+
+/* Try to refresh access token using refresh token */
+async function refreshAccess() {
+  const refresh = getRefreshToken();
+  if (!refresh) return false;
+  try {
+    const res = await fetch('/api/token/refresh/', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({refresh})
+    });
+    if (!res.ok) return false;
+    const data = await res.json();
+    setTokens(data.access, data.refresh || refresh);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/* Wrapper for fetch that tries refresh-on-401 once */
+async function authedFetch(url, opts = {}) {
+  opts.headers = Object.assign({}, opts.headers || {}, authHeaders(opts.json !== false));
+  opts.credentials = opts.credentials || 'same-origin';
+  let res = await fetch(url, opts);
+  if (res.status === 401) {
+    const ok = await refreshAccess();
+    if (ok) {
+      opts.headers = Object.assign({}, opts.headers || {}, authHeaders(opts.json !== false));
+      res = await fetch(url, opts);
+    }
+  }
+  return res;
+}
+
+/* ---------- UI helpers ---------- */
+const messagesEl = document.getElementById('messages');
+function addMessageToUI(m) {
+  const el = document.createElement('div');
+  el.className = 'msg ' + (m.sender || 'system');
+  const time = m.created_at ? new Date(m.created_at).toLocaleString() : '';
+  el.innerHTML = `<strong>[${m.sender}]</strong> ${escapeHtml(m.text || '')} <div style="font-size:0.8em;color:#666">${time}</div>`;
+  messagesEl.appendChild(el);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+function renderMessages(list) {
+  messagesEl.innerHTML = '';
+  (list || []).forEach(addMessageToUI);
+}
+function escapeHtml(s){ return s.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
+
+/* ---------- Login / Logout ---------- */
+const loginBtn = document.getElementById('loginBtn');
+const logoutBtn = document.getElementById('logoutBtn');
+const userInfo = document.getElementById('userInfo');
+
+function updateAuthUI() {
+  const token = getAccessToken();
+  if (token) {
+    loginBtn.style.display = 'none';
+    logoutBtn.style.display = 'inline-block';
+    userInfo.textContent = 'Logged in (token present)';
+  } else {
+    loginBtn.style.display = 'inline-block';
+    logoutBtn.style.display = 'none';
+    userInfo.textContent = 'Not logged in';
+  }
+}
+updateAuthUI();
+
+loginBtn.addEventListener('click', async () => {
+  const u = document.getElementById('loginUser').value.trim();
+  const p = document.getElementById('loginPass').value;
+  if (!u || !p) { alert('enter username + password'); return; }
+  try {
+    const res = await fetch('/api/token/', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({username: u, password: p})
+    });
+    const data = await res.json();
+    if (!res.ok) { alert('Login failed: ' + JSON.stringify(data)); return; }
+    setTokens(data.access, data.refresh);
+    updateAuthUI();
+    alert('Logged in');
+  } catch (e) { alert('Login error: ' + e); }
+});
+
+logoutBtn.addEventListener('click', () => {
+  clearTokens();
+  updateAuthUI();
+  alert('Logged out');
+});
+
+/* ---------- Conversation / messages / WebSocket ---------- */
+let convId = null;
+let pollInterval = null;
+
+document.getElementById('createConvBtn').addEventListener('click', async () => {
+  try {
+    const res = await authedFetch('/api/conversations/', {
+      method: 'POST',
+      body: JSON.stringify({})  // server accepts empty or user id
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      alert('Create failed: ' + txt);
+      return;
+    }
+    const c = await res.json();
+    document.getElementById('convId').value = c.id;
+    alert('Conversation created: ' + c.id);
+  } catch (e) {
+    alert('Create error: ' + e);
+  }
+});
+
+document.getElementById('loadBtn').addEventListener('click', () => {
+  const id = document.getElementById('convId').value.trim();
+  if (!id) { alert('Enter conversation id'); return; }
+  convId = id;
+  fetchMessages();
+  // use the external ws helper (defined in chat/static/chat/ws.js)
+  if (typeof connectChatWebSocket === 'function') {
+    connectChatWebSocket(convId);
+  }
+  if (pollInterval) clearInterval(pollInterval);
+  // keep a fallback poll (in case websocket not available)
+  pollInterval = setInterval(fetchMessages, 5000);
+});
+
+async function fetchMessages() {
+  if (!convId) return;
+  const res = await authedFetch(`/api/messages/?conversation=${convId}`, { method:'GET', json:false });
+  if (!res.ok) {
+    console.error('fetchMessages failed', await res.text());
+    return;
+  }
+  const data = await res.json();
+  renderMessages(data);
+}
+
+/* Send message: prefer websocket via external helper, fallback to REST */
+document.getElementById('sendBtn').addEventListener('click', async () => {
+  if (!convId) { alert('Load conversation first'); return; }
+  const text = document.getElementById('msgInput').value.trim();
+  const sender = document.getElementById('senderSelect').value || 'user';
+  if (!text) return;
+
+  // optimistic UI
+  addMessageToUI({sender, text, created_at: new Date().toISOString()});
+  document.getElementById('msgInput').value = '';
+
+  // try websocket helper if available
+  if (typeof window.sendChatMessage === 'function') {
+    try {
+      const r = await window.sendChatMessage(convId, sender, text);
+      // if REST returned created data, optionally re-fetch to keep consistent
+      if (r && r.via === 'rest') {
+        await fetchMessages();
+      }
+      return;
+    } catch (e) {
+      console.warn('WS send failed, falling back to REST', e);
+      // fall through to REST
+    }
+  }
+
+  // fallback REST
+  const payload = { conversation: convId, sender, text };
+  try {
+    const res = await authedFetch('/api/messages/', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      alert('Send failed: ' + txt);
+    }
+  } catch (e) {
+    alert('Send error: ' + e);
+  }
+});
+
+/* ---------- initial state ---------- */
+updateAuthUI();
+// if conv id is present in input (e.g., bookmarked), auto-load
+const initialConv = document.getElementById('convId').value.trim();
+if (initialConv) {
+  convId = initialConv;
+  fetchMessages();
+  if (typeof connectChatWebSocket === 'function') {
+    connectChatWebSocket(convId);
+  }
+  pollInterval = setInterval(fetchMessages, 5000);
+}
+</script>
+
+<!-- External websocket helper (must be after the inline script) -->
+<script src="{% static 'chat/ws.js' %}"></script>
+</body>
+</html>
