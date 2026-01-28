@@ -215,3 +215,8 @@ SIMPLE_JWT = {
     "USER_ID_CLAIM": "user_id",
     "USER_AUTHENTICATION_RULE": "rest_framework_simplejwt.authentication.default_user_authentication_rule",
 }
+
+MEDGEMMA_BASE_URL = 'http://localhost:8080'
+MEDGEMMA_MODEL = 'medgemma-4b'
+MEDGEMMA_TIMEOUT = 60
+MEDGEMMA_ENABLED = True

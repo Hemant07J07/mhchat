@@ -2,12 +2,13 @@
 """
 Background tasks for MHChat (improved).
 
+Key behavior:
 - Uses optional OpenAI wrapper (chat.ai) when available.
 - Respects safety: if a user message is flagged (esp. high severity) we DO NOT call the LLM.
 - Optional embeddings storage (MessageEmbedding model + ai.embed_text).
-- Redis-backed simple window counter rate limiter for per-user LLM calls.
+- Simple Redis-backed window counter rate limiter for per-user LLM calls (optional).
 - Robust Channels broadcasting (non-fatal).
-- Works with Celery (shared_task) or synchronously without Celery.
+- Works whether Celery is installed (shared_task) or not (plain function).
 """
 
 import logging
@@ -31,7 +32,15 @@ except Exception:
 from .models import Message, Conversation
 from .nlp import analyze_message, safety_check, generate_bot_response as generate_bot_response_fallback
 
-# Try to import AI wrapper (optional)
+# Import MedGemma client for medical AI
+try:
+    from .medgemma_client import get_medgemma_client
+    MEDGEMMA_AVAILABLE = True
+except Exception:
+    MEDGEMMA_AVAILABLE = False
+    logger.warning("MedGemma client not available; will use fallback generator.")
+
+# Try to import AI wrapper (optional - kept for backwards compatibility)
 try:
     from .ai import generate_bot_response_openai, embed_text
     AI_AVAILABLE = True
@@ -70,7 +79,8 @@ REDIS_HOST = getattr(settings, "REDIS_HOST", os.environ.get("REDIS_HOST", "local
 REDIS_PORT = int(getattr(settings, "REDIS_PORT", os.environ.get("REDIS_PORT", 6379)))
 LLM_RATE_LIMIT = int(getattr(settings, "LLM_RATE_LIMIT", os.environ.get("LLM_RATE_LIMIT", 50)))
 LLM_RATE_PERIOD = int(getattr(settings, "LLM_RATE_PERIOD", os.environ.get("LLM_RATE_PERIOD", 3600)))
-USE_LLM = getattr(settings, "USE_LLM", True) and AI_AVAILABLE
+# Always enable AI (MedGemma preferred, falls back to OpenAI, then to generator)
+USE_LLM = getattr(settings, "USE_LLM", True)
 
 # lazy redis client
 _redis_client = None
@@ -95,16 +105,17 @@ def _get_redis():
 def allow_user_llm_call(user_id: int, limit: int = LLM_RATE_LIMIT, period: int = LLM_RATE_PERIOD) -> bool:
     """
     Simple windowed counter using Redis. Returns True if call allowed.
+    Key: llm_count:<user_id>
+    Behavior: increments counter and sets TTL to period on first increment.
     """
     r = _get_redis()
     if not r:
-        logger.debug("Redis not available: allowing LLM call for user %s (no rate limiting)", user_id)
+        logger.debug("Redis unavailable: allowing LLM call for user %s (no rate limiting)", user_id)
         return True
     key = f"llm_count:{user_id}"
     try:
         cur = r.get(key)
         if cur is None:
-            # set to 1 with expire
             pipe = r.pipeline()
             pipe.set(key, 1, ex=period)
             pipe.execute()
@@ -120,33 +131,53 @@ def allow_user_llm_call(user_id: int, limit: int = LLM_RATE_LIMIT, period: int =
 
 
 def _broadcast_message(message_obj: Message):
-    """Broadcast a Message via Channels (non-fatal)."""
+    """
+    Broadcast a single Message instance to its conversation group via Channels.
+    Non-fatal: if Channels isn't available or broadcast fails, ignore (log) and continue.
+
+    Note: sends to both "conversation_<id>" and "conv_<id>" group names to accommodate
+    either naming used by different consumer versions.
+    """
     if not CHANNELS_AVAILABLE:
         logger.debug("Channels not available; skipping broadcast for message id=%s", getattr(message_obj, "id", None))
         return
+
     try:
         channel_layer = get_channel_layer()
         if not channel_layer:
             logger.warning("No channel layer available; skipping broadcast for message id=%s", getattr(message_obj, "id", None))
             return
+
         payload = MessageSerializer(message_obj).data
-        async_to_sync(channel_layer.group_send)(
-            f"conversation_{message_obj.conversation.id}",
-            {"type": "chat_message", "message": payload},
-        )
-        logger.debug("Broadcasted message id=%s to group conversation_%s", message_obj.id, message_obj.conversation.id)
+        # Send to both common group-name variants (safe-guard for different consumer code)
+        groups = [f"conversation_{message_obj.conversation.id}", f"conv_{message_obj.conversation.id}"]
+        for g in groups:
+            try:
+                async_to_sync(channel_layer.group_send)(
+                    g,
+                    {"type": "chat_message", "message": payload},
+                )
+                logger.debug("Broadcasted message id=%s to group %s", message_obj.id, g)
+            except Exception:
+                # log but continue other groups
+                logger.exception("Failed to send to group %s for message %s", g, getattr(message_obj, "id", None))
     except Exception:
         logger.exception("Failed to broadcast message id=%s", getattr(message_obj, "id", None))
 
 
 def _maybe_store_embedding(message_obj: Message):
-    """Compute and store embedding if embed_text + MessageEmbedding exist."""
+    """
+    If embed_text() and MessageEmbedding model exist, compute embedding and store it.
+    Run in try/except to avoid failing task on embedding errors.
+    """
     if embed_text is None or MessageEmbedding is None:
         return
+
     try:
         vec = embed_text(message_obj.text or "")
         if not vec:
             return
+        # Vector field shape/length must match model; handle saving gracefully.
         MessageEmbedding.objects.update_or_create(message=message_obj, defaults={"vector": vec})
         logger.debug("Saved embedding for message id=%s", message_obj.id)
     except Exception:
@@ -155,26 +186,73 @@ def _maybe_store_embedding(message_obj: Message):
 
 def _call_llm_safe(user_id: int, user_text: str, history: List[dict]) -> str:
     """
-    Rate-limit and call LLM if available; fallback to local generator.
+    Wrapper that calls MedGemma AI for medical responses.
+    Falls back to OpenAI if available, then to fallback generator.
+    
+    Priority:
+    1. MedGemma AI (for medical chat)
+    2. OpenAI wrapper (if available)
+    3. Fallback generator (simple rule-based)
     """
     if not USE_LLM:
-        logger.debug("LLM disabled or not available; using fallback generator.")
-        return generate_bot_response_fallback(user_text, {})  # fallback signature in your repo
+        logger.debug("LLM usage disabled; using fallback generator.")
+        return generate_bot_response_fallback(user_text, {})
 
     allowed = allow_user_llm_call(user_id)
     if not allowed:
         logger.warning("LLM rate limit exceeded for user %s; using fallback.", user_id)
         return generate_bot_response_fallback(user_text, {})
 
+    # Try MedGemma first (primary choice for medical chat)
+    if MEDGEMMA_AVAILABLE:
+        try:
+            client = get_medgemma_client()
+            
+            # Check if MedGemma server is available
+            if not client.is_available():
+                logger.debug("MedGemma server not available; trying OpenAI or fallback.")
+            else:
+                # Convert history to MedGemma format
+                conversation_history = None
+                if history:
+                    conversation_history = [
+                        {
+                            "role": "user" if h.get("sender") == "user" else "assistant",
+                            "content": h.get("text", "")
+                        }
+                        for h in history
+                    ]
+                
+                # Call MedGemma
+                logger.debug(f"Calling MedGemma AI for message from user {user_id}")
+                response = client.analyze_text(
+                    message=user_text,
+                    conversation_history=conversation_history,
+                    temperature=0.7,
+                    max_tokens=1000
+                )
+                
+                if response:
+                    logger.info(f"MedGemma response generated for user {user_id}")
+                    return response
+                else:
+                    logger.debug("MedGemma returned empty response; trying fallback.")
+        except Exception as e:
+            logger.exception(f"MedGemma call failed: {e}; trying alternatives.")
+    
+    # Fallback to OpenAI if available
     try:
-        resp = generate_bot_response_openai(user_text, history=history)
-        if not resp:
-            logger.debug("LLM returned empty response; using fallback.")
-            return generate_bot_response_fallback(user_text, {})
-        return resp
+        if generate_bot_response_openai:
+            logger.debug(f"Using OpenAI wrapper for user {user_id}")
+            resp = generate_bot_response_openai(user_text, history=history)
+            if resp:
+                return resp
     except Exception:
-        logger.exception("LLM call failed; using fallback generator.")
-        return generate_bot_response_fallback(user_text, {})
+        logger.exception("OpenAI call failed; using fallback generator.")
+    
+    # Final fallback to rule-based generator
+    logger.debug(f"Using fallback generator for user {user_id}")
+    return generate_bot_response_fallback(user_text, {})
 
 
 def _generate_bot_reply_and_create_message(msg: Message) -> Message:
@@ -189,10 +267,15 @@ def _generate_bot_reply_and_create_message(msg: Message) -> Message:
     user_obj = getattr(getattr(msg, "conversation", None), "user", None)
     user_id = getattr(user_obj, "id", None) or 0
 
+    logger.info(f"Generating bot reply for user {user_id}. Message text: {msg.text[:50] if msg.text else 'empty'}")
+    
     bot_text = _call_llm_safe(user_id, msg.text or "", history)
+    
+    logger.info(f"Bot response generated: {bot_text[:100] if bot_text else 'empty'}")
 
     # create bot message
     bot_msg = Message.objects.create(conversation=msg.conversation, sender="bot", text=bot_text)
+    logger.info(f"Bot message created with ID: {bot_msg.id}")
 
     # optional embedding for bot message
     try:

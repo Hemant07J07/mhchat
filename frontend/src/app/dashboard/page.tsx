@@ -79,8 +79,8 @@ export default function DashboardPage() {
 
       <main className="col-span-6 bg-white p-4 rounded shadow flex flex-col">
         <div className="flex-1 overflow-auto p-2 space-y-2" id="messages">
-          {messages.map((m,i)=>(
-            <div key={i} className={`p-2 rounded ${m.sender==='bot' ? 'bg-blue-50 text-blue-800' : 'bg-white'}`}>
+          {messages.map((m)=>(
+            <div key={m.id || `message-${m.created_at}`} className={`p-2 rounded ${m.sender==='bot' ? 'bg-blue-50 text-blue-800' : 'bg-white'}`}>
               <div className="text-xs text-slate-400">[{m.sender}] {m.created_at && new Date(m.created_at).toLocaleString()}</div>
               <div className="mt-1">{m.text}</div>
             </div>

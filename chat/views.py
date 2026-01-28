@@ -100,9 +100,10 @@ class MessageViewSet(viewsets.ModelViewSet):
             # Enqueue celery task if available; otherwise call synchronously
             try:
                 if hasattr(handle_user_message, 'delay'):
+                    # Run async task
                     handle_user_message.delay(message.id)
                 else:
-                    # synchronous fallback (useful for dev without Celery)
+                    # synchronous execution - blocks until bot response is created
                     handle_user_message(message.id)
             except Exception as exc:
                 # Don't fail the creation; return created with a note that background processing failed.
@@ -115,8 +116,17 @@ class MessageViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_201_CREATED,
                 )
 
-        # Return the created message (re-serialize from DB to include any defaults)
-        return Response(MessageSerializer(message).data, status=status.HTTP_201_CREATED)
+        # Refresh message and get bot response if it was created synchronously
+        message.refresh_from_db()
+        
+        # Fetch all messages in conversation to include bot response
+        all_messages = Message.objects.filter(conversation=conv).order_by('created_at')
+        response_data = {
+            "user_message": MessageSerializer(message).data,
+            "all_messages": MessageSerializer(all_messages, many=True).data,
+        }
+        
+        return Response(response_data, status=status.HTTP_201_CREATED)
 
     @action(detail=False, methods=['get'])
     def recent(self, request):

@@ -69,6 +69,12 @@ Then open: **http://localhost:3000**
 - `GET /api/profile/` - Get profile
 - `PATCH /api/profile/update/` - Update profile
 
+### Medical AI (MedGemma)
+- `POST /api/medgemma/text/` - Text query (simple chat)
+- `POST /api/medgemma/image/` - Image analysis (X-ray, CT scan, etc.)
+- `POST /api/medgemma/medical-context/` - Get medical information about conditions
+- `GET /api/medgemma/status/` - Check if medical AI service is available
+
 ---
 
 ## 🎨 UI Components
@@ -78,6 +84,12 @@ Then open: **http://localhost:3000**
 | Message | `src/components/Message.tsx` | Display messages |
 | MessageInput | `src/components/MessageInput.tsx` | Send messages |
 | Sidebar | `src/components/Sidebar.tsx` | Conversation list |
+| SimpleMedicalChat | `src/components/MedicalAIComponents.tsx` | Simple medical Q&A |
+| MedicalImageAnalyzer | `src/components/MedicalAIComponents.tsx` | Analyze medical images |
+| ContextualMedicalChat | `src/components/MedicalAIComponents.tsx` | Multi-turn conversations |
+| MedicalConditionLookup | `src/components/MedicalAIComponents.tsx` | Search medical info |
+| SymptomChecker | `src/components/MedicalAIComponents.tsx` | Interactive symptom checker |
+| MedicalAIHub | `src/components/MedicalAIComponents.tsx` | Combined medical AI interface |
 
 ---
 
@@ -171,6 +183,8 @@ REDIS_PORT=6379
 - **FRONTEND_INTEGRATION_GUIDE.md** - Frontend details
 - **DEVELOPMENT_GUIDE.md** - Development workflow
 - **INTEGRATION_SUMMARY.md** - What was implemented
+- **MEDGEMMA_USE_CASES.md** - Common medical AI use cases
+- **MEDGEMMA_ARCHITECTURE.md** - System architecture details
 
 ---
 
@@ -212,6 +226,21 @@ REDIS_PORT=6379
 3. Review error messages in console
 4. Check Django logs in terminal
 5. Inspect browser network tab (F12)
+
+---
+
+## 🤖 Getting AI-Generated Responses
+
+By default, the chat uses a fallback response generator (rule-based). To get intelligent AI responses:
+
+**Quick Fix:**
+```bash
+ollama serve medgemma-4b
+```
+
+Then test: `python test_medgemma.py`
+
+**Full Guide:** See [AI_RESPONSES_SETUP_GUIDE.md](AI_RESPONSES_SETUP_GUIDE.md)
 
 ---
 

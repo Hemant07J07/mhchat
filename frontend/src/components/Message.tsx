@@ -137,8 +137,8 @@ export const MessageList: React.FC<MessageListProps> = ({ messages, loading }) =
         </div>
       ) : (
         <>
-          {messages.map((msg) => (
-            <Message key={msg.id} message={msg} />
+          {messages.map((msg, index) => (
+            <Message key={msg.id || `msg-${index}`} message={msg} />
           ))}
           {loading && (
             <div className="flex justify-start mb-4 group">
