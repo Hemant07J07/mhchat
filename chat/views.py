@@ -97,19 +97,14 @@ class MessageViewSet(viewsets.ModelViewSet):
         with transaction.atomic():
             message = serializer.save(nlp_metadata={}, is_flagged=False)
 
-            # Enqueue celery task if available; otherwise call synchronously
+            # Synchronous execution (no Celery dependency)
             try:
-                if hasattr(handle_user_message, 'delay'):
-                    # Run async task
-                    handle_user_message.delay(message.id)
-                else:
-                    # synchronous execution - blocks until bot response is created
-                    handle_user_message(message.id)
+                handle_user_message(message.id)
             except Exception as exc:
-                # Don't fail the creation; return created with a note that background processing failed.
+                # Don't fail the creation; return created with a note that processing failed.
                 return Response(
                     {
-                        "detail": "Message created but background processing failed.",
+                        "detail": "Message created but bot processing failed.",
                         "error": str(exc),
                         "message": MessageSerializer(message).data,
                     },

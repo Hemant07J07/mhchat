@@ -1,188 +1,77 @@
-# 🔴 Issue Analysis: AI Responses Not Working
+# AI Responses Troubleshooting (mhchat-ml)
 
-## Problem
+This project no longer uses legacy LLM providers or Celery for bot responses.
 
-The chat application is displaying **saved conversation history** instead of generating **real AI responses** from MedGemma.
+All “brain” functionality comes from the **mhchat-ml** FastAPI service (`POST /predict`), and the UI/server build a short, safe reply from its output:
 
-### Root Causes Identified
+- If `crisis=true`: return an emergency-safe message.
+- Otherwise: use the top KB hit(s) as a short suggestion + a follow-up question.
 
-1. **Wrong LLM Integration Path**
-   - The system tries to use `OpenAI` wrapper first (via `chat.ai` module)
-   - When OpenAI isn't available, it falls back to `generate_bot_response_fallback()`
-   - **MedGemma is never called** - it exists only in separate endpoints (`/api/medgemma/text/`)
+## Symptoms
 
-2. **Two Separate AI Integration Paths**
-   - **Path 1 (Not Working):** Regular chat → `sendMessage()` → `handle_user_message` → Fallback generator
-   - **Path 2 (Exists but Unused):** `MedGemmaChat.tsx` → `/api/medgemma/text/` endpoint → MedGemma AI
-   - **Frontend is using Path 1**, not Path 2
+- The chat responds with generic fallback messages
+- The chat shows no “KB hits”
+- The UI shows an error like “Failed to reach ML service”
 
-3. **Missing MedGemma Integration in Task Handler**
-   - The `tasks.py` doesn't know about MedGemma at all
-   - It only knows about OpenAI and fallback
+## Quick Checklist
 
----
+### 1) Is mhchat-ml running?
 
-## Solution: Integrate MedGemma into Task Handler
+From the `mhchat-ml` folder:
 
-### Step 1: Modify `chat/tasks.py` to use MedGemma
-
-Replace the `_call_llm_safe()` function to call MedGemma instead of OpenAI:
-
-```python
-# In tasks.py, update imports:
-from .medgemma_client import get_medgemma_client
-
-def _call_llm_safe(user_id: int, user_text: str, history: List[dict]) -> str:
-    """
-    Wrapper that calls MedGemma AI for medical responses.
-    Falls back to fallback generator if MedGemma unavailable.
-    """
-    try:
-        client = get_medgemma_client()
-        
-        # Check if MedGemma server is available
-        if not client.is_available():
-            logger.warning("MedGemma server not available; using fallback.")
-            return generate_bot_response_fallback(user_text, {})
-        
-        # Convert history to MedGemma format
-        conversation_history = [
-            {"role": "user" if h.get("sender") == "user" else "assistant", 
-             "content": h.get("text", "")}
-            for h in history
-        ]
-        
-        # Call MedGemma
-        response = client.analyze_text(
-            message=user_text,
-            conversation_history=conversation_history if conversation_history else None,
-            temperature=0.7,
-            max_tokens=1000
-        )
-        
-        return response if response else generate_bot_response_fallback(user_text, {})
-        
-    except Exception as e:
-        logger.exception(f"MedGemma call failed: {e}")
-        return generate_bot_response_fallback(user_text, {})
+```powershell
+python -m uvicorn src.api.main:app --reload --port 8001
 ```
 
-### Step 2: Update the `USE_LLM` Check
+Open docs: http://127.0.0.1:8001/docs
 
-Modify the initial LLM availability check:
+### 2) Can you hit `/predict` directly?
 
-```python
-# Replace this:
-# USE_LLM = getattr(settings, "USE_LLM", True) and AI_AVAILABLE
-
-# With this:
-USE_LLM = True  # Always enabled - we'll use MedGemma or fallback
+```powershell
+$body = @{ message = 'hello' } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:8001/predict' -ContentType 'application/json' -Body $body
 ```
 
----
+Expected shape:
 
-## Implementation Instructions
-
-### File: `chat/tasks.py`
-
-1. **Add import at the top (around line 33):**
-   ```python
-   from .medgemma_client import get_medgemma_client
-   ```
-
-2. **Replace the `_call_llm_safe()` function (lines 178-207)** with the new implementation above
-
-3. **Update the `USE_LLM` flag** (around line 60) to always be `True`
-
----
-
-## Expected Behavior After Fix
-
-1. User sends message in chat
-2. Message saved to database
-3. Background task triggered (`handle_user_message`)
-4. Task calls `_call_llm_safe()`
-5. `_call_llm_safe()` calls **MedGemma AI** (if available)
-6. MedGemma returns medical response
-7. Response saved as bot message
-8. Frontend refetches messages and displays AI response
-
----
-
-## Testing the Fix
-
-### Prerequisites
-Ensure MedGemma server is running:
-```bash
-ollama serve medgemma-4b
-# or whatever your MedGemma setup is
+```json
+{ "intent": "...", "intent_score": 0.9, "crisis": false, "kb_hits": ["..."] }
 ```
 
-### Test Steps
-1. Open chat at `http://localhost:3000`
-2. Send a message: "What are symptoms of diabetes?"
-3. Wait 2-3 seconds
-4. Should see AI response from MedGemma, not from fallback
+### 3) Is the Next.js proxy configured?
 
-### How to Verify It's Using MedGemma
-- Check backend logs for: `"Calling MedGemma for medical analysis"`
-- If fallback is used, you'll see: `"MedGemma server not available; using fallback"`
+The Next.js proxy routes call mhchat-ml using `MHCHAT_ML_API_BASE` (default: `http://localhost:8001`).
 
----
+If your ML server isn’t on that address, set:
 
-## Alternative: Update Frontend to Use MedGemma Endpoint Directly
-
-If you prefer the frontend to call MedGemma directly instead of through the regular chat:
-
-### Current Flow (After Fix Above)
-```
-Frontend Chat Input 
-  → sendMessage() 
-  → Backend creates user message 
-  → Celery task 
-  → MedGemma AI 
-  → Creates bot message
-  → Frontend polls for new messages
+```env
+MHCHAT_ML_API_BASE=http://127.0.0.1:8001
 ```
 
-### Alternative Flow (More Direct)
-```
-Frontend Chat Input 
-  → Call /api/medgemma/text/ directly
-  → Get response immediately
-  → Create messages manually
-```
+Then test the proxy:
 
-This would require modifying `frontend/src/lib/store.ts` to call MedGemma endpoint.
+- `GET /api/ml/health`
+- `POST /api/ml/predict` with body `{ "message": "hello" }`
 
----
+### 4) Django pipeline (optional)
 
-## Configuration Check
+If you’re using the Django message endpoints, the bot reply pipeline is synchronous and calls mhchat-ml via `chat/ml_brain_client.py`.
 
-Verify your Django settings (`mhchat_proj/settings.py`) has:
+Run:
 
-```python
-# MedGemma Configuration
-MEDGEMMA_BASE_URL = 'http://localhost:8080'  # or your MedGemma server
-MEDGEMMA_MODEL = 'medgemma-4b'
-MEDGEMMA_TIMEOUT = 60
-
-# Celery Configuration (for async tasks)
-CELERY_BROKER_URL = 'redis://localhost:6379/0'  # or your Redis URL
-CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
-
-# Disable OpenAI requirement
-OPENAI_API_KEY = None  # This is optional
+```powershell
+python run_complete_tests.py
 ```
 
----
+If mhchat-ml is not running, the pipeline will fall back to the local generator (this is expected).
 
-## Next Steps
+## Common Fixes
 
-1. ✅ Apply the fix to `chat/tasks.py`
-2. ✅ Ensure MedGemma server is running on port 8080
-3. ✅ Restart Django server: `python manage.py runserver`
-4. ✅ Test the chat with a medical question
-5. ✅ Check logs for success/failure
+- **mhchat-ml not started** → start it on port `8001`.
+- **Wrong ML base URL** → set `MHCHAT_ML_API_BASE`.
+- **Timeouts** → increase `MHCHAT_ML_TIMEOUT_MS` in the frontend environment.
 
-If you need help implementing any of these changes, let me know!
+## Notes
+
+- There is no Celery worker to run.
+- Redis is not required unless you explicitly configure Channels to use Redis (`CHANNEL_LAYER_BACKEND=redis`).

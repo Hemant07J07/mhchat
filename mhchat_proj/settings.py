@@ -156,16 +156,25 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # ------- ASGI / Channels -------
 ASGI_APPLICATION = "mhchat_proj.asgi.application"
 
-# fix: read REDIS_PORT from REDIS_PORT env (typo corrected)
-REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
-REDIS_PORT = int(os.environ.get("REDIS_PORT", 6379))
-
-CHANNEL_LAYERS = {
-    "default": {
-        "BACKEND": "channels_redis.core.RedisChannelLayer",
-        "CONFIG": {"hosts": [(os.environ.get("REDIS_HOST", "127.0.0.1"), int(os.environ.get("REDISH_PORT",6379)))]},
+# Channels layer: default to in-memory (no Redis dependency).
+# If you want Redis for multi-process deployments, set:
+#   CHANNEL_LAYER_BACKEND=redis  (and install channels_redis + redis)
+CHANNEL_LAYER_BACKEND = os.environ.get("CHANNEL_LAYER_BACKEND", "memory").lower()
+if CHANNEL_LAYER_BACKEND == "redis":
+    REDIS_HOST = os.environ.get("REDIS_HOST", "127.0.0.1")
+    REDIS_PORT = int(os.environ.get("REDIS_PORT", 6379))
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels_redis.core.RedisChannelLayer",
+            "CONFIG": {"hosts": [(REDIS_HOST, REDIS_PORT)]},
+        }
     }
-}
+else:
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels.layers.InMemoryChannelLayer",
+        }
+    }
 
 # ------- Email / Admins -------
 EMAIL_BACKEND = os.environ.get("EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend")
@@ -194,11 +203,6 @@ LOGGING = {
     },
 }
 
-# Use Redis as celery broker (adjust host/port for Docker or local)
-CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", f"redis://{REDIS_HOST}:{REDIS_PORT}/0")
-CELERY_RESULT_BACKEND = CELERY_BROKER_URL
-
-USE_LLM = bool(os.environ.get("USE_LLM", "1") == "1")
 
 # JWT Configuration
 from datetime import timedelta
@@ -215,8 +219,3 @@ SIMPLE_JWT = {
     "USER_ID_CLAIM": "user_id",
     "USER_AUTHENTICATION_RULE": "rest_framework_simplejwt.authentication.default_user_authentication_rule",
 }
-
-MEDGEMMA_BASE_URL = 'http://localhost:8080'
-MEDGEMMA_MODEL = 'medgemma-4b'
-MEDGEMMA_TIMEOUT = 60
-MEDGEMMA_ENABLED = True

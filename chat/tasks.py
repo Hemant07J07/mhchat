@@ -1,142 +1,44 @@
 # chat/tasks.py
-"""
-Background tasks for MHChat (improved).
+"""MHChat bot reply pipeline (no legacy LLM providers, no Celery).
 
-Key behavior:
-- Uses optional OpenAI wrapper (chat.ai) when available.
-- Respects safety: if a user message is flagged (esp. high severity) we DO NOT call the LLM.
-- Optional embeddings storage (MessageEmbedding model + ai.embed_text).
-- Simple Redis-backed window counter rate limiter for per-user LLM calls (optional).
-- Robust Channels broadcasting (non-fatal).
-- Works whether Celery is installed (shared_task) or not (plain function).
+Behavior:
+- On each user message, we run local safety checks.
+- If flagged -> create a system message and (optionally) email admins on high severity.
+- If not flagged -> call mhchat-ml (/predict) to get KB hits + crisis flag and generate a safe reply.
+- If mhchat-ml is unavailable -> fall back to the local rule-based generator.
+
+This module is intentionally synchronous to avoid Celery/Redis dependencies.
 """
 
 import logging
-import os
-from typing import List, Optional
 
-from django.utils import timezone
 from django.conf import settings
 from django.core.mail import send_mail
+from django.utils import timezone
+
+from .models import Message
+from .nlp import analyze_message, safety_check, generate_bot_response as generate_bot_response_fallback
+from .ml_brain_client import predict as ml_predict
 
 logger = logging.getLogger(__name__)
-
-# Celery availability
-try:
-    from celery import shared_task
-    CELERY_AVAILABLE = True
-except Exception:
-    CELERY_AVAILABLE = False
-
-# Models & fallback NLU generator
-from .models import Message, Conversation
-from .nlp import analyze_message, safety_check, generate_bot_response as generate_bot_response_fallback
-
-# Import MedGemma client for medical AI
-try:
-    from .medgemma_client import get_medgemma_client
-    MEDGEMMA_AVAILABLE = True
-except Exception:
-    MEDGEMMA_AVAILABLE = False
-    logger.warning("MedGemma client not available; will use fallback generator.")
-
-# Try to import AI wrapper (optional - kept for backwards compatibility)
-try:
-    from .ai import generate_bot_response_openai, embed_text
-    AI_AVAILABLE = True
-except Exception:
-    generate_bot_response_openai = None
-    embed_text = None
-    AI_AVAILABLE = False
-    logger.info("chat.ai not available; using fallback generator.")
 
 # Channels availability (optional)
 try:
     from asgiref.sync import async_to_sync
     from channels.layers import get_channel_layer
     from .serializers import MessageSerializer
+
     CHANNELS_AVAILABLE = True
 except Exception:
     CHANNELS_AVAILABLE = False
-
-# Redis availability for rate-limiter (optional)
-try:
-    import redis
-    REDIS_AVAILABLE = True
-except Exception:
-    redis = None
-    REDIS_AVAILABLE = False
-
-# Optional MessageEmbedding model (pgvector etc.)
-MessageEmbedding = None
-try:
-    from .models import MessageEmbedding
-except Exception:
-    MessageEmbedding = None
-
-# Config (env or Django settings)
-REDIS_HOST = getattr(settings, "REDIS_HOST", os.environ.get("REDIS_HOST", "localhost"))
-REDIS_PORT = int(getattr(settings, "REDIS_PORT", os.environ.get("REDIS_PORT", 6379)))
-LLM_RATE_LIMIT = int(getattr(settings, "LLM_RATE_LIMIT", os.environ.get("LLM_RATE_LIMIT", 50)))
-LLM_RATE_PERIOD = int(getattr(settings, "LLM_RATE_PERIOD", os.environ.get("LLM_RATE_PERIOD", 3600)))
-# Always enable AI (MedGemma preferred, falls back to OpenAI, then to generator)
-USE_LLM = getattr(settings, "USE_LLM", True)
-
-# lazy redis client
-_redis_client = None
-
-
-def _get_redis():
-    global _redis_client
-    if _redis_client is not None:
-        return _redis_client
-    if not REDIS_AVAILABLE:
-        return None
-    try:
-        _redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
-        _redis_client.ping()
-        return _redis_client
-    except Exception:
-        logger.exception("Could not connect to Redis at %s:%s; rate-limiter disabled", REDIS_HOST, REDIS_PORT)
-        _redis_client = None
-        return None
-
-
-def allow_user_llm_call(user_id: int, limit: int = LLM_RATE_LIMIT, period: int = LLM_RATE_PERIOD) -> bool:
-    """
-    Simple windowed counter using Redis. Returns True if call allowed.
-    Key: llm_count:<user_id>
-    Behavior: increments counter and sets TTL to period on first increment.
-    """
-    r = _get_redis()
-    if not r:
-        logger.debug("Redis unavailable: allowing LLM call for user %s (no rate limiting)", user_id)
-        return True
-    key = f"llm_count:{user_id}"
-    try:
-        cur = r.get(key)
-        if cur is None:
-            pipe = r.pipeline()
-            pipe.set(key, 1, ex=period)
-            pipe.execute()
-            return True
-        cur_val = int(cur)
-        if cur_val >= limit:
-            return False
-        r.incr(key, 1)
-        return True
-    except Exception:
-        logger.exception("Redis error while rate-limiting for user %s", user_id)
-        return True
 
 
 def _broadcast_message(message_obj: Message):
     """
     Broadcast a single Message instance to its conversation group via Channels.
     Non-fatal: if Channels isn't available or broadcast fails, ignore (log) and continue.
-
-    Note: sends to both "conversation_<id>" and "conv_<id>" group names to accommodate
-    either naming used by different consumer versions.
+    
+    Uses single group name: conversation_<id> (must match consumer.group_name).
     """
     if not CHANNELS_AVAILABLE:
         logger.debug("Channels not available; skipping broadcast for message id=%s", getattr(message_obj, "id", None))
@@ -149,146 +51,49 @@ def _broadcast_message(message_obj: Message):
             return
 
         payload = MessageSerializer(message_obj).data
-        # Send to both common group-name variants (safe-guard for different consumer code)
-        groups = [f"conversation_{message_obj.conversation.id}", f"conv_{message_obj.conversation.id}"]
-        for g in groups:
-            try:
-                async_to_sync(channel_layer.group_send)(
-                    g,
-                    {"type": "chat_message", "message": payload},
-                )
-                logger.debug("Broadcasted message id=%s to group %s", message_obj.id, g)
-            except Exception:
-                # log but continue other groups
-                logger.exception("Failed to send to group %s for message %s", g, getattr(message_obj, "id", None))
+        group_name = f"conversation_{message_obj.conversation.id}"   # must match consumer.group_name
+        
+        try:
+            async_to_sync(channel_layer.group_send)(
+                group_name,
+                {"type": "chat_message", "message": payload},
+            )
+            logger.info("Broadcasted message id=%s to group %s", message_obj.id, group_name)
+        except Exception:
+            logger.exception("Failed to send to group %s for message %s", group_name, getattr(message_obj, "id", None))
     except Exception:
         logger.exception("Failed to broadcast message id=%s", getattr(message_obj, "id", None))
-
-
-def _maybe_store_embedding(message_obj: Message):
-    """
-    If embed_text() and MessageEmbedding model exist, compute embedding and store it.
-    Run in try/except to avoid failing task on embedding errors.
-    """
-    if embed_text is None or MessageEmbedding is None:
-        return
-
-    try:
-        vec = embed_text(message_obj.text or "")
-        if not vec:
-            return
-        # Vector field shape/length must match model; handle saving gracefully.
-        MessageEmbedding.objects.update_or_create(message=message_obj, defaults={"vector": vec})
-        logger.debug("Saved embedding for message id=%s", message_obj.id)
-    except Exception:
-        logger.exception("Failed to store embedding for message %s", getattr(message_obj, "id", None))
-
-
-def _call_llm_safe(user_id: int, user_text: str, history: List[dict]) -> str:
-    """
-    Wrapper that calls MedGemma AI for medical responses.
-    Falls back to OpenAI if available, then to fallback generator.
-    
-    Priority:
-    1. MedGemma AI (for medical chat)
-    2. OpenAI wrapper (if available)
-    3. Fallback generator (simple rule-based)
-    """
-    if not USE_LLM:
-        logger.debug("LLM usage disabled; using fallback generator.")
-        return generate_bot_response_fallback(user_text, {})
-
-    allowed = allow_user_llm_call(user_id)
-    if not allowed:
-        logger.warning("LLM rate limit exceeded for user %s; using fallback.", user_id)
-        return generate_bot_response_fallback(user_text, {})
-
-    # Try MedGemma first (primary choice for medical chat)
-    if MEDGEMMA_AVAILABLE:
-        try:
-            client = get_medgemma_client()
-            
-            # Check if MedGemma server is available
-            if not client.is_available():
-                logger.debug("MedGemma server not available; trying OpenAI or fallback.")
-            else:
-                # Convert history to MedGemma format
-                conversation_history = None
-                if history:
-                    conversation_history = [
-                        {
-                            "role": "user" if h.get("sender") == "user" else "assistant",
-                            "content": h.get("text", "")
-                        }
-                        for h in history
-                    ]
-                
-                # Call MedGemma
-                logger.debug(f"Calling MedGemma AI for message from user {user_id}")
-                response = client.analyze_text(
-                    message=user_text,
-                    conversation_history=conversation_history,
-                    temperature=0.7,
-                    max_tokens=1000
-                )
-                
-                if response:
-                    logger.info(f"MedGemma response generated for user {user_id}")
-                    return response
-                else:
-                    logger.debug("MedGemma returned empty response; trying fallback.")
-        except Exception as e:
-            logger.exception(f"MedGemma call failed: {e}; trying alternatives.")
-    
-    # Fallback to OpenAI if available
-    try:
-        if generate_bot_response_openai:
-            logger.debug(f"Using OpenAI wrapper for user {user_id}")
-            resp = generate_bot_response_openai(user_text, history=history)
-            if resp:
-                return resp
-    except Exception:
-        logger.exception("OpenAI call failed; using fallback generator.")
-    
-    # Final fallback to rule-based generator
-    logger.debug(f"Using fallback generator for user {user_id}")
-    return generate_bot_response_fallback(user_text, {})
-
 
 def _generate_bot_reply_and_create_message(msg: Message) -> Message:
     """
     Build short history, call LLM (via safe wrapper) or fallback, create bot Message,
     store optional embedding and broadcast. Returns created Message.
     """
-    # history: last 8 messages (oldest->newest)
-    history_qs = Message.objects.filter(conversation=msg.conversation).order_by("-created_at")[:8]
-    history = [{"sender": m.sender, "text": (m.text or "")} for m in reversed(history_qs)]
+    user_text = msg.text or ""
 
-    user_obj = getattr(getattr(msg, "conversation", None), "user", None)
-    user_id = getattr(user_obj, "id", None) or 0
-
-    logger.info(f"Generating bot reply for user {user_id}. Message text: {msg.text[:50] if msg.text else 'empty'}")
-    
-    bot_text = _call_llm_safe(user_id, msg.text or "", history)
-    
-    logger.info(f"Bot response generated: {bot_text[:100] if bot_text else 'empty'}")
+    # Try mhchat-ml first
+    pred = ml_predict(user_text)
+    if pred and isinstance(pred, dict) and pred.get("reply"):
+        bot_text = str(pred.get("reply"))
+        # attach ML output as metadata to the USER message for traceability
+        try:
+            msg.nlp_metadata = {**(msg.nlp_metadata or {}), "ml": pred}
+            msg.save(update_fields=["nlp_metadata"])
+        except Exception:
+            logger.exception("Failed to store ml metadata for message %s", getattr(msg, "id", None))
+    else:
+        bot_text = generate_bot_response_fallback(user_text, msg.nlp_metadata or {})
 
     # create bot message
     bot_msg = Message.objects.create(conversation=msg.conversation, sender="bot", text=bot_text)
     logger.info(f"Bot message created with ID: {bot_msg.id}")
 
-    # optional embedding for bot message
-    try:
-        _maybe_store_embedding(bot_msg)
-    except Exception:
-        # logged inside helper
-        pass
-
-    # broadcast (non-fatal)
+    # broadcast (non-fatal) - wrapped in try/except for robustness
     try:
         _broadcast_message(bot_msg)
+        logger.info("Successfully broadcasted bot message id=%s to conversation %s", bot_msg.id, msg.conversation.id)
     except Exception:
-        logger.exception("Broadcast of bot message %s failed", getattr(bot_msg, "id", None))
+        logger.exception("Broadcast of bot message %s failed for conversation %s", getattr(bot_msg, "id", None), msg.conversation.id)
 
     return bot_msg
 
@@ -332,12 +137,6 @@ def _handle_user_message_logic(message_id):
     except Exception:
         logger.exception("Failed to save NLP metadata for message %s", message_id)
 
-    # possibly embed the user message
-    try:
-        _maybe_store_embedding(msg)
-    except Exception:
-        pass
-
     # 4) If flagged: system message + escalation (do NOT call LLM)
     if flagged:
         sys_text = (
@@ -380,14 +179,6 @@ def _handle_user_message_logic(message_id):
         return {"status": "error", "message_id": message_id, "error": str(exc)}
 
 
-# Expose handle_user_message for Celery or synchronous execution
-if CELERY_AVAILABLE:
+def handle_user_message(message_id):
+    return _handle_user_message_logic(message_id)
 
-    @shared_task(bind=True)
-    def handle_user_message(self, message_id):
-        return _handle_user_message_logic(message_id)
-
-else:
-
-    def handle_user_message(message_id):
-        return _handle_user_message_logic(message_id)

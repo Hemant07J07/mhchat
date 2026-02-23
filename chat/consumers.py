@@ -1,6 +1,8 @@
-import json
 import logging
+import asyncio
 from datetime import datetime
+
+from .tasks import handle_user_message
 
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from channels.db import database_sync_to_async
@@ -15,7 +17,7 @@ logger = logging.getLogger(__name__)
 class ChatConsumer(AsyncJsonWebsocketConsumer):
     """
     WebSocket consumer for a single conversation.
-    - Group name: conversation_<conversation_id> (must match tasks._broadcast_message)
+    - Group name: conversation_<conversation_id>
     - On connect: validates user + conversation access, sends recent messages
     - receive_json: supports "send_message" and "ping"
     - chat_message: handler for group sends (type="chat_message")
@@ -78,6 +80,9 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         Accept JSON messages from client:
          - {action: "ping"}
          - {action: "send_message", text: "..."}
+
+        After persisting the user message, we trigger a background task to
+        generate an AI reply (non-blocking).
         """
         try:
             action = content.get("action")
@@ -110,15 +115,26 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
                 user = self.scope.get("user")
                 created = await self._create_message(self.conv_id, user.id, text)
 
-                # broadcast created message to group (async call; no async_to_sync)
+                # broadcast created message to group
                 payload = MessageSerializer(created).data
                 await self.channel_layer.group_send(
                     self.group_name,
                     {"type": "chat_message", "message": payload}
                 )
 
-                # ack to sender
+                # ack to sender immediately
                 await self.send_json({"type": "message_sent", "message": payload})
+
+                # Send a typing indicator for the AI to the client(s)
+                await self.channel_layer.group_send(
+                    self.group_name,
+                    {"type": "chat_message", "message": {"system": "ai_typing", "conversation_id": self.conv_id}}
+                )
+
+                # spawn background task to generate AI reply off the event loop
+                # do not await here to keep consumer responsive
+                asyncio.create_task(self._generate_and_send_ai(created.id, text))
+
                 return
 
             # unknown action
@@ -137,8 +153,30 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         message = event.get("message")
         if not message:
             return
+        # DEBUG: log contents received by consumer
+        try:
+            msg_id = message.get("id", "<no-id>")
+            logger.debug("chat_message received in consumer for conv %s, message id=%s", self.conv_id, msg_id)
+        except Exception:
+            pass
         # forward to client
         await self.send_json({"type": "message", "message": message})
+
+    # -------------------------
+    # Background AI generation
+    # -------------------------
+    async def _generate_and_send_ai(self, user_message_id, user_text):
+        """Background task to generate a bot reply via mhchat-ml (no OpenAI/Celery)."""
+        try:
+            # Run synchronous pipeline in a thread. It will create/broadcast system+bot messages.
+            await asyncio.to_thread(handle_user_message, int(user_message_id))
+        except Exception:
+            logger.exception("_generate_and_send_ai: error generating AI reply")
+            err_payload = {"system": "ai_error", "error": "server_error"}
+            try:
+                await self.channel_layer.group_send(self.group_name, {"type": "chat_message", "message": err_payload})
+            except Exception:
+                logger.exception("_generate_and_send_ai: failed to send ai_error payload")
 
     # -------------------------
     # Database helper methods
@@ -164,3 +202,5 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         # create as sender='user' (worker will fill NLU metadata)
         msg = Message.objects.create(conversation=conv, sender="user", text=text)
         return msg
+
+ 

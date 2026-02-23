@@ -15,7 +15,6 @@ from django.views.generic import TemplateView
 from django.views.decorators.csrf import ensure_csrf_cookie
 from .views_dashboard import dashboard_stats
 from . import views
-from . import views_medgemma
 
 # Main router for conversations
 router = DefaultRouter()
@@ -42,12 +41,6 @@ urlpatterns = [
     
     # Dashboard stats
     path('api/dashboard/stats/', dashboard_stats, name='dashboard-stats'),
-    
-    # MedGemma AI endpoints
-    path('api/medgemma/text/', views_medgemma.medgemma_text_query, name='medgemma-text'),
-    path('api/medgemma/image/', views_medgemma.medgemma_image_query, name='medgemma-image'),
-    path('api/medgemma/status/', views_medgemma.medgemma_status, name='medgemma-status'),
-    path('api/medgemma/context/', views_medgemma.medgemma_medical_context, name='medgemma-context'),
     
     # Simple frontend at root (for quick testing)
     path('', ensure_csrf_cookie(TemplateView.as_view(template_name='chat/index.html')), name='chat-home'),

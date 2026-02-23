@@ -58,6 +58,8 @@ out/
 .env
 .env.*.local
 .env.local
+secrets/
+client_secret*.json
 
 # Celery
 celerybeat-schedule

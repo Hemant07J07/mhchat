@@ -31,10 +31,10 @@ export const MessageInput: React.FC<MessageInputProps> = ({
 
   return (
     <div className="bg-white">
-      <div className="flex gap-3 items-end">
+      <div className="flex gap-3 items-end max-w-4xl mx-auto">
         <div className="flex gap-2">
           <button
-            className="p-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-600"
+            className="p-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-600 hover:text-gray-900"
             title="Attach file"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -50,7 +50,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
           onBlur={() => setIsFocused(false)}
           placeholder="What's in your mind?"
           disabled={loading || disabled}
-          className={`flex-1 resize-none border-2 rounded-xl px-4 py-3 focus:outline-none transition-all disabled:opacity-50 disabled:cursor-not-allowed bg-white text-sm ${
+          className={`flex-1 resize-none border-2 rounded-2xl px-4 py-3 focus:outline-none transition-all disabled:opacity-50 disabled:cursor-not-allowed bg-white text-sm font-medium ${
             isFocused
               ? "border-blue-400 shadow-lg shadow-blue-100"
               : "border-gray-200 hover:border-gray-300"

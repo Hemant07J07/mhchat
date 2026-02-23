@@ -1,33 +1,32 @@
-# MHChat - AI-Powered Mental Health Chatbot
+# MHChat - Mental Health Chat (single ML brain)
 
-MHChat is a modern, full-stack web application that combines a Django backend with a Next.js frontend to provide an intelligent conversational AI assistant focused on mental health support.
+MHChat is a web application with a Next.js frontend and an optional Django backend. All “brain” functionality (intent + crisis detection + KB retrieval) is provided by the separate **mhchat-ml** FastAPI service.
 
 ## Features
 
-- **AI-Powered Conversations**: Intelligent chatbot powered by GPT for natural, context-aware responses
-- **Conversation Management**: Create, view, and delete conversations easily
-- **Real-time Updates**: WebSocket support for real-time messaging
-- **User Authentication**: JWT-based authentication system
-- **Responsive Design**: Modern UI built with Next.js, React, and Tailwind CSS
-- **NLP Capabilities**: Intent recognition and NLU processing
-- **RAG Support**: Retrieval-Augmented Generation for enhanced responses
+- **Single “brain”**: mhchat-ml is the only ML service used end-to-end
+- **Safety-first responses**: crisis detection produces an emergency-safe response
+- **KB-grounded suggestions**: non-crisis responses are built from KB hits
+- **Modern chat UI**: Next.js + React + Tailwind
+- **Optional backend**: Django + DRF + Channels for persistence/auth/WS (legacy/optional)
 
 ## Tech Stack
 
-### Backend
-- **Framework**: Django 5.x
-- **Language**: Python 3.x
-- **Database**: SQLite (development) / PostgreSQL (production ready)
-- **Task Queue**: Celery with Redis
-- **API**: Django REST Framework
-- **WebSocket**: Django Channels
-- **AI**: OpenAI GPT, Hugging Face Transformers
+### ML Brain (mhchat-ml)
+- **Framework**: FastAPI
+- **Language**: Python
+- **Endpoint**: `POST /predict` → `{ intent, intent_score, crisis, kb_hits }`
+
+### Backend (optional)
+- **Framework**: Django 5.x + Django REST Framework
+- **WebSocket**: Django Channels (in-memory layer by default)
+- **Background jobs**: none required (synchronous pipeline; no Celery/Redis dependency)
 
 ### Frontend
 - **Framework**: Next.js 14+
 - **Language**: TypeScript
 - **Styling**: Tailwind CSS, PostCSS
-- **State Management**: Zustand
+- **Server routes**: Next.js API routes proxy mhchat-ml (avoids CORS)
 - **Build Tool**: npm/yarn
 - **UI Components**: Custom React components
 
@@ -40,15 +39,14 @@ mhchat/
 │   ├── views.py                   # API views
 │   ├── consumers.py               # WebSocket consumers
 │   ├── serializers.py             # DRF serializers
-│   ├── ai.py                      # AI/GPT integration
-│   ├── rag.py                     # RAG implementation
+│   ├── ml_brain_client.py          # mhchat-ml client (server-side)
 │   ├── nlp.py                     # NLP processing
 │   ├── jwt_auth.py                # JWT authentication
 │   └── migrations/                # Database migrations
 ├── mhchat_proj/                   # Django project settings
 │   ├── settings.py                # Project configuration
 │   ├── asgi.py                    # ASGI config (WebSocket)
-│   ├── celery.py                  # Celery configuration
+│   ├── celery.py                  # (legacy) Celery config file (not required)
 │   └── urls.py                    # URL routing
 ├── frontend/                      # Next.js application
 │   ├── src/
@@ -57,22 +55,23 @@ mhchat/
 │   │   └── lib/                   # Utilities and hooks
 │   ├── package.json               # Dependencies
 │   └── tailwind.config.js         # Tailwind configuration
-├── scripts/                       # Utility scripts
-│   └── train_intent.py            # Intent model training
-├── data/                          # Data files
-│   └── intent_samples.csv         # Training data
+├── run_complete_tests.py           # End-to-end sanity checks (Django pipeline)
 ├── docker-compose.yml             # Docker services
 ├── dockerfile                     # Docker image
 ├── manage.py                      # Django CLI
 └── requirements.txt               # Python dependencies
 ```
 
+Note: the ML service lives in a sibling folder/repo: `../mhchat-ml`.
+
 ## Installation
 
 ### Prerequisites
-- Python 3.8+
+- Python 3.10+
 - Node.js 18+
 - Docker (optional, for containerization)
+
+You also need the **mhchat-ml** service available (see “Run mhchat-ml”).
 
 ### Backend Setup
 
@@ -134,13 +133,15 @@ npm run dev
 
 5. Open [http://localhost:3000](http://localhost:3000) in your browser
 
-### Celery Setup (Optional)
+### Run mhchat-ml (required for ML responses)
 
-For asynchronous task processing:
+In a separate terminal, from the `mhchat-ml` repo:
 
-```bash
-python -m celery -A mhchat_proj.celery worker --loglevel=info -P solo
+```powershell
+python -m uvicorn src.api.main:app --reload --port 8001
 ```
+
+Docs: http://127.0.0.1:8001/docs
 
 ## Docker Deployment
 
@@ -151,9 +152,12 @@ docker-compose up --build
 ```
 
 This will start:
-- Django backend on http://localhost:8000
+- Django backend (ASGI) on http://localhost:8000
+- Postgres database
+
+Run these separately:
+- mhchat-ml on http://localhost:8001
 - Next.js frontend on http://localhost:3000
-- Database and cache services
 
 ## Configuration
 
@@ -167,17 +171,30 @@ DEBUG=True
 SECRET_KEY=your-secret-key-here
 ALLOWED_HOSTS=localhost,127.0.0.1
 
-# Database
-DATABASE_URL=sqlite:///db.sqlite3
-
-# OpenAI
-OPENAI_API_KEY=your-api-key-here
+# Database (optional; if unset, Django uses SQLite)
+POSTGRES_DB=mhchat
+POSTGRES_USER=mhchat
+POSTGRES_PASSWORD=mhchatpass
+DB_HOST=db
+DB_PORT=5432
 
 # JWT
 JWT_SECRET=your-jwt-secret-here
 
-# Redis (for Celery)
-REDIS_URL=redis://localhost:6379/0
+# Channels (optional Redis; default is in-memory)
+CHANNEL_LAYER_BACKEND=memory
+# If CHANNEL_LAYER_BACKEND=redis:
+REDIS_HOST=127.0.0.1
+REDIS_PORT=6379
+
+# ML brain (used by Django AND Next.js proxy)
+MHCHAT_ML_API_BASE=http://127.0.0.1:8001
+
+# Next.js ML proxy timeout (optional)
+MHCHAT_ML_TIMEOUT_MS=8000
+
+# Frontend optional
+NEXT_PUBLIC_HUMAN_SUPPORT_EMAIL=support@example.com
 ```
 
 ### Settings
@@ -192,22 +209,35 @@ Backend configuration is in `mhchat_proj/settings.py`. Key settings:
 ## API Endpoints
 
 ### Chat Endpoints
-- `GET /api/conversations/` - List all conversations
-- `POST /api/conversations/` - Create new conversation
+- `GET /api/conversations/` - List conversations
+- `POST /api/conversations/` - Create a conversation
 - `GET /api/conversations/{id}/` - Get conversation details
-- `DELETE /api/conversations/{id}/` - Delete conversation
-- `POST /api/messages/` - Send message
-- `GET /api/messages/{id}/` - Get message
+- `DELETE /api/conversations/{id}/` - Delete a conversation
+- `GET /api/conversations/{id}/messages/` - List messages in a conversation
+- `POST /api/conversations/{id}/messages/` - Create a user message (triggers synchronous bot/system response)
 
 ### WebSocket
-- `ws://localhost:8000/ws/chat/{conversation_id}/` - Real-time chat connection
+- `ws://localhost:8000/ws/conversations/{conversation_id}/` - Real-time chat connection
+
+### Next.js ML Proxy
+- `POST /api/ml/predict` - Proxy to mhchat-ml `/predict` and builds a safe short reply
+- `GET /api/ml/health` - Basic upstream health check
 
 ## Usage
 
-1. **Start a Conversation**: Click "New chat" in the sidebar to create a new conversation
-2. **Send Messages**: Type your message and press Enter or click the send button
-3. **View History**: All conversations are saved and displayed in the sidebar
-4. **Delete Conversation**: Select a conversation and click the delete icon
+### Current Next.js demo chat
+
+1. Start **mhchat-ml** on port `8001`
+2. Start the **Next.js frontend** on port `3000`
+3. Open http://localhost:3000 and send a message
+
+Notes:
+- The current UI calls mhchat-ml via the Next.js proxy (`/api/ml/predict`) and keeps chat history in memory.
+- If mhchat-ml flags `crisis=true`, the UI will show a crisis-safe response flow.
+
+### Django-backed chat (optional / legacy)
+
+If you use the Django REST endpoints and/or WebSockets, run the Django server and use the `/api/conversations/...` endpoints listed above.
 
 ## Development
 
@@ -216,6 +246,11 @@ Backend configuration is in `mhchat_proj/settings.py`. Key settings:
 Backend:
 ```bash
 python manage.py test
+```
+
+End-to-end sanity checks:
+```bash
+python run_complete_tests.py
 ```
 
 Frontend:
@@ -248,7 +283,7 @@ npm run format
 ### Message
 - `id`: Primary key
 - `conversation`: Foreign key to Conversation
-- `sender`: 'user' or 'ai'
+- `sender`: 'user' | 'bot' | 'system'
 - `text`: Message content
 - `created_at`: Timestamp
 - `options`: Additional metadata
@@ -267,7 +302,14 @@ npm run format
 
 **Port already in use:**
 ```bash
-python manage.py runserver 8001
+python manage.py runserver 8002
+```
+
+### mhchat-ml Issues
+
+**Port already in use:**
+```bash
+python -m uvicorn src.api.main:app --reload --port 8002
 ```
 
 **Database errors:**
@@ -314,7 +356,6 @@ For support, email support@mhchat.com or open an issue on the GitHub repository.
 
 ## Acknowledgments
 
-- OpenAI for GPT API
 - Hugging Face for transformer models
 - Django and Next.js communities
 - All contributors who have helped with the project
@@ -322,4 +363,4 @@ For support, email support@mhchat.com or open an issue on the GitHub repository.
 ---
 
 **Status**: Active Development
-**Last Updated**: November 2025
+**Last Updated**: February 2026
