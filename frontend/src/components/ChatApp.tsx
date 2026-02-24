@@ -31,17 +31,22 @@ function formatTime(iso: string) {
 }
 
 function PhoneHeader({ variant }: { variant: PhoneVariant }) {
-  const dots = variant === "dark" ? "bg-slate-400/70" : "bg-slate-300";
+  const dots = variant === "dark" ? "bg-blue-500" : "bg-slate-300";
   const title = variant === "dark" ? "text-white" : "text-slate-900";
   const subtitle = variant === "dark" ? "text-slate-300" : "text-slate-400";
 
   return (
-    <div className="relative px-8 pt-10 pb-4">
+    <div className="relative px-8 pt-12 pb-2">
       <div className={`text-center text-3xl font-semibold tracking-tight ${title}`}>mhchat</div>
       <div className={`mt-5 text-center text-[10px] font-semibold tracking-[0.35em] ${subtitle}`}>
         GHAT YE2
       </div>
       <div className="absolute right-5 top-5 flex items-center gap-2">
+        <div
+          className={`h-7 w-7 rounded-full ${
+            variant === "dark" ? "bg-white/15" : "bg-slate-200"
+          }`}
+        />
         <div className={`h-2 w-2 rounded-full ${dots}`} />
         <div className={`h-2 w-2 rounded-full ${dots}`} />
         <div className={`h-2 w-2 rounded-full ${dots}`} />
@@ -70,9 +75,9 @@ function ChatBubble({
   return (
     <div className={`flex items-end gap-3 ${isUser ? "justify-end" : "justify-start"}`}>
       {!isUser && (
-        <div className={`h-9 w-9 rounded-full ${avatarBg} flex items-center justify-center ${avatarText} text-xs font-semibold`}>
-          
-        </div>
+        <div
+          className={`h-9 w-9 rounded-full ${avatarBg} flex items-center justify-center ${avatarText} text-xs font-semibold`}
+        />
       )}
 
       <div className={`max-w-[78%] ${isUser ? "text-right" : "text-left"}`}>
@@ -87,9 +92,9 @@ function ChatBubble({
       </div>
 
       {isUser && (
-        <div className={`h-9 w-9 rounded-full ${avatarBg} flex items-center justify-center ${avatarText} text-xs font-semibold`}>
-          
-        </div>
+        <div
+          className={`h-9 w-9 rounded-full ${avatarBg} flex items-center justify-center ${avatarText} text-xs font-semibold`}
+        />
       )}
     </div>
   );
@@ -102,14 +107,15 @@ function PhoneShell({
   variant: PhoneVariant;
   children: React.ReactNode;
 }) {
-  const shell =
-    variant === "dark"
-      ? "bg-gradient-to-b from-slate-950 to-slate-900"
-      : "bg-white";
+  const shell = variant === "dark" ? "bg-slate-950" : "bg-white";
+  const outline = variant === "dark" ? "border-white/15" : "border-black/20";
 
   return (
-    <div className="w-full max-w-[420px]">
-      <div className={`mx-auto w-full rounded-[34px] ${shell} shadow-2xl ring-1 ring-black/5`}>
+    <div className="w-full">
+      <div
+        className={`mx-auto w-[360px] rounded-[34px] ${shell} shadow-2xl border ${outline}`}
+        style={{ height: "min(760px, calc(100dvh - 96px))" }}
+      >
         {children}
       </div>
     </div>
@@ -290,17 +296,17 @@ export default function ChatApp() {
   }
 
   return (
-    <div className="min-h-dvh w-full bg-gradient-to-b from-slate-100 to-slate-50 px-6 py-10">
-      <div className="mx-auto flex w-full max-w-6xl flex-col items-center justify-center gap-10 lg:flex-row lg:items-stretch lg:gap-14">
+    <div className="h-dvh w-full overflow-hidden bg-white px-8 py-10">
+      <div className="mx-auto flex h-full w-full max-w-6xl flex-col items-center justify-center gap-10 md:flex-row md:items-stretch md:gap-14">
         {(["dark", "light"] as const).map((variant) => {
           const scrollRef = variant === "dark" ? scrollRefDark : scrollRefLight;
-          const messageAreaBg = variant === "dark" ? "bg-transparent" : "bg-transparent";
+          const messageAreaBg = "bg-transparent";
           const errorPillBg = variant === "dark" ? "bg-white/10 text-white/80" : "bg-slate-100 text-slate-500";
           const hintText = variant === "dark" ? "text-white/50" : "text-slate-400";
 
           return (
             <PhoneShell key={variant} variant={variant}>
-              <div className="flex min-h-[740px] flex-col">
+              <div className="flex h-full flex-col">
                 <PhoneHeader variant={variant} />
 
                 <div className={`relative flex-1 px-6 ${messageAreaBg}`}>
@@ -312,15 +318,15 @@ export default function ChatApp() {
 
                   <div
                     ref={scrollRef}
-                    className="h-full overflow-auto pb-6 pt-8"
+                    className="h-full overflow-auto pb-6 pt-7"
                     style={{ scrollbarGutter: "stable" }}
                   >
                     {messages.length === 0 ? (
-                      <div className={`px-2 pt-14 text-center text-sm ${hintText}`}>
+                      <div className={`px-2 pt-10 text-center text-sm ${hintText}`}>
                         Type a message to start.
                       </div>
                     ) : (
-                      <div className="space-y-6">
+                      <div className="space-y-5">
                         {messages.map((m) => (
                           <ChatBubble key={`${variant}-${m.id}`} variant={variant} message={m} />
                         ))}
