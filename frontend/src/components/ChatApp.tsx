@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRight, Folder, Smile, Users } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import { predictWithBrain } from "@/lib/mlBrain";
 
 type UiMessage = {
@@ -17,8 +17,6 @@ type UiMessage = {
 
 const MAX_HISTORY = 10;
 
-type PhoneVariant = "dark" | "light";
-
 function formatTime(iso: string) {
   try {
     return new Date(iso).toLocaleTimeString([], {
@@ -30,154 +28,113 @@ function formatTime(iso: string) {
   }
 }
 
-function PhoneHeader({ variant }: { variant: PhoneVariant }) {
-  const dots = variant === "dark" ? "bg-blue-500" : "bg-slate-300";
-  const title = variant === "dark" ? "text-white" : "text-slate-900";
-  const subtitle = variant === "dark" ? "text-slate-300" : "text-slate-400";
-
+function PanelHeader({ subtitle }: { subtitle?: string }) {
   return (
-    <div className="relative px-8 pt-12 pb-2">
-      <div className={`text-center text-3xl font-semibold tracking-tight ${title}`}>mhchat</div>
-      <div className={`mt-5 text-center text-[10px] font-semibold tracking-[0.35em] ${subtitle}`}>
-        GHAT YE2
-      </div>
-      <div className="absolute right-5 top-5 flex items-center gap-2">
-        <div
-          className={`h-7 w-7 rounded-full ${
-            variant === "dark" ? "bg-white/15" : "bg-slate-200"
-          }`}
-        />
-        <div className={`h-2 w-2 rounded-full ${dots}`} />
-        <div className={`h-2 w-2 rounded-full ${dots}`} />
-        <div className={`h-2 w-2 rounded-full ${dots}`} />
+    <div className="relative px-10 pt-10 pb-4">
+      <div className="text-center text-3xl font-semibold tracking-tight text-white">mhchat</div>
+      {subtitle ? (
+        <div className="mt-4 text-center text-[10px] font-semibold tracking-[0.35em] text-white/55">
+          {subtitle}
+        </div>
+      ) : null}
+
+      <div className="absolute right-6 top-6 flex items-center gap-2">
+        <div className="h-7 w-7 rounded-full bg-white/10" />
+        <div className="h-2 w-2 rounded-full bg-blue-500" />
+        <div className="h-2 w-2 rounded-full bg-blue-500" />
+        <div className="h-2 w-2 rounded-full bg-blue-500" />
       </div>
     </div>
   );
 }
 
-function ChatBubble({
-  variant,
-  message,
-}: {
-  variant: PhoneVariant;
-  message: UiMessage;
-}) {
+function ChatBubble({ message }: { message: UiMessage }) {
   const isUser = message.role === "user";
 
-  const avatarBg = variant === "dark" ? "bg-white/20" : "bg-slate-200";
-  const avatarText = variant === "dark" ? "text-white/80" : "text-slate-600";
-
-  const botBubble = "bg-blue-500 text-white shadow-lg shadow-blue-500/20";
-  const userBubble = "bg-emerald-500 text-white shadow-lg shadow-emerald-500/20";
-
-  const timeText = variant === "dark" ? "text-slate-400" : "text-slate-400";
+  const botBubble = "bg-blue-500/90 text-white";
+  const userBubble = "bg-emerald-400/80 text-white";
 
   return (
-    <div className={`flex items-end gap-3 ${isUser ? "justify-end" : "justify-start"}`}>
-      {!isUser && (
+    <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+      <div className={`max-w-[72%] ${isUser ? "text-right" : "text-left"}`}>
         <div
-          className={`h-9 w-9 rounded-full ${avatarBg} flex items-center justify-center ${avatarText} text-xs font-semibold`}
-        />
-      )}
-
-      <div className={`max-w-[78%] ${isUser ? "text-right" : "text-left"}`}>
-        <div
-          className={`inline-block rounded-2xl px-4 py-3 text-sm leading-relaxed ${
+          className={`inline-block rounded-2xl px-4 py-2.5 text-[12px] leading-relaxed ${
             isUser ? userBubble : botBubble
           } ${isUser ? "rounded-br-md" : "rounded-bl-md"}`}
         >
           <div className="whitespace-pre-wrap">{message.text}</div>
         </div>
-        <div className={`mt-2 text-[11px] ${timeText}`}>{formatTime(message.createdAt)}</div>
+        <div className="mt-1 text-[10px] text-white/35">{formatTime(message.createdAt)}</div>
       </div>
-
-      {isUser && (
-        <div
-          className={`h-9 w-9 rounded-full ${avatarBg} flex items-center justify-center ${avatarText} text-xs font-semibold`}
-        />
-      )}
     </div>
   );
 }
 
-function PhoneShell({
-  variant,
-  children,
-}: {
-  variant: PhoneVariant;
-  children: React.ReactNode;
-}) {
-  const shell = variant === "dark" ? "bg-slate-950" : "bg-white";
-  const outline = variant === "dark" ? "border-white/15" : "border-black/20";
+function NavPanel() {
+  return (
+    <div className="w-[200px] shrink-0">
+      <div className="rounded-2xl bg-white/6 p-4 ring-1 ring-white/10">
+        <div className="text-[11px] font-semibold text-white/70">Home</div>
+        <div className="mt-3 space-y-2">
+          <div className="rounded-lg bg-white/5 px-3 py-2 text-[12px] text-white/70">Home</div>
+          <div className="rounded-lg bg-white/5 px-3 py-2 text-[12px] text-white/70">Profile</div>
+          <div className="rounded-lg bg-amber-400/25 px-3 py-2 text-[12px] font-semibold text-amber-200 ring-1 ring-amber-200/30">
+            Emergency Response
+          </div>
+          <div className="rounded-lg bg-white/5 px-3 py-2 text-[12px] text-white/70">Settings</div>
+        </div>
+        <div className="mt-5 flex items-center justify-between">
+          <div className="text-[11px] text-white/50"> </div>
+          <div className="h-5 w-9 rounded-full bg-emerald-400/60 p-[2px]">
+            <div className="h-4 w-4 rounded-full bg-white/90" />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function KnowledgeBasePanel({ hits }: { hits: string[] }) {
+  const items = hits.length
+    ? hits.slice(0, 4)
+    : [
+        "Coping with Anxiety",
+        "Mindfulness",
+        "Breathing exercises",
+        "Grounding technique",
+      ];
 
   return (
-    <div className="w-full">
-      <div
-        className={`mx-auto w-[360px] rounded-[34px] ${shell} shadow-2xl border ${outline}`}
-        style={{ height: "min(760px, calc(100dvh - 96px))" }}
-      >
-        {children}
+    <div className="w-[210px] shrink-0">
+      <div className="rounded-2xl bg-white/6 p-4 ring-1 ring-white/10">
+        <div className="text-[11px] font-semibold text-white/70">Knowledge Base</div>
+        <div className="mt-3 space-y-2">
+          {items.map((t, i) => (
+            <div key={`${t}-${i}`} className="rounded-lg bg-white/5 px-3 py-2 text-[12px] text-white/70">
+              {t}
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
 }
 
-function BottomBar({
-  variant,
+function BottomInput({
   input,
   setInput,
   sending,
   onSend,
-  onConnectHuman,
 }: {
-  variant: PhoneVariant;
   input: string;
   setInput: (v: string) => void;
   sending: boolean;
   onSend: () => void;
-  onConnectHuman: () => void;
 }) {
-  const iconWrap =
-    variant === "dark"
-      ? "text-white/80 hover:text-white"
-      : "text-slate-500 hover:text-slate-900";
-
-  const inputBg = variant === "dark" ? "bg-white/5" : "bg-slate-50";
-  const inputBorder = variant === "dark" ? "border-white/10" : "border-slate-200";
-  const inputText = variant === "dark" ? "text-white" : "text-slate-900";
-  const inputPlaceholder = variant === "dark" ? "placeholder:text-white/40" : "placeholder:text-slate-400";
-
   return (
-    <div className="px-6 pb-6">
-      <div className="flex items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={onConnectHuman}
-            className={`inline-flex h-9 w-9 items-center justify-center rounded-full ${iconWrap}`}
-            title="Connect to human"
-          >
-            <Users size={18} />
-          </button>
-          <button
-            type="button"
-            className={`inline-flex h-9 w-9 items-center justify-center rounded-full ${iconWrap}`}
-            title="Files"
-            disabled
-          >
-            <Folder size={18} />
-          </button>
-          <button
-            type="button"
-            className={`inline-flex h-9 w-9 items-center justify-center rounded-full ${iconWrap}`}
-            title="Emoji"
-            disabled
-          >
-            <Smile size={18} />
-          </button>
-        </div>
-
-        <div className={`flex flex-1 items-center gap-3 rounded-full border ${inputBorder} ${inputBg} px-4 py-2`}>
+    <div className="px-10 pb-8">
+      <div className="flex items-center gap-3">
+        <div className="flex flex-1 items-center gap-3 rounded-full bg-white/6 px-4 py-2 ring-1 ring-white/10">
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -189,29 +146,18 @@ function BottomBar({
             }}
             disabled={sending}
             placeholder="Type your message..."
-            className={`min-w-0 flex-1 bg-transparent text-sm outline-none ${inputText} ${inputPlaceholder}`}
+            className="min-w-0 flex-1 bg-transparent text-[12px] text-white placeholder:text-white/35 outline-none"
           />
           <button
             type="button"
             onClick={onSend}
             disabled={sending || !input.trim()}
-            className={`${
-              variant === "dark" ? "text-white/60 hover:text-white" : "text-slate-400 hover:text-slate-900"
-            } disabled:opacity-40`}
+            className="text-white/60 hover:text-white disabled:opacity-40"
             title="Send"
           >
             <ArrowRight size={18} />
           </button>
         </div>
-
-        <button
-          type="button"
-          onClick={onSend}
-          disabled={sending || !input.trim()}
-          className="h-10 rounded-xl bg-blue-500 px-5 text-sm font-semibold text-white shadow-lg shadow-blue-500/20 hover:bg-blue-600 disabled:opacity-60"
-        >
-          Send
-        </button>
       </div>
     </div>
   );
@@ -223,8 +169,8 @@ export default function ChatApp() {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showCrisis, setShowCrisis] = useState(false);
-  const scrollRefDark = useRef<HTMLDivElement>(null);
-  const scrollRefLight = useRef<HTMLDivElement>(null);
+  const scrollRefLeft = useRef<HTMLDivElement>(null);
+  const scrollRefRight = useRef<HTMLDivElement>(null);
 
   const supportEmail =
     (process.env.NEXT_PUBLIC_HUMAN_SUPPORT_EMAIL || "support@example.com").trim();
@@ -236,9 +182,17 @@ export default function ChatApp() {
   }, [messages]);
 
   useEffect(() => {
-    const refs = [scrollRefDark.current, scrollRefLight.current].filter(Boolean) as HTMLDivElement[];
+    const refs = [scrollRefLeft.current, scrollRefRight.current].filter(Boolean) as HTMLDivElement[];
     for (const el of refs) el.scrollTop = el.scrollHeight;
   }, [messages, sending]);
+
+  const latestKbHits = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const m = messages[i];
+      if (m.role === "assistant" && Array.isArray(m.kb_hits) && m.kb_hits.length) return m.kb_hits;
+    }
+    return [] as string[];
+  }, [messages]);
 
   async function handleSend() {
     const text = input.trim();
@@ -296,61 +250,97 @@ export default function ChatApp() {
   }
 
   return (
-    <div className="h-dvh w-full overflow-hidden bg-white px-8 py-10">
-      <div className="mx-auto flex h-full w-full max-w-6xl flex-col items-center justify-center gap-10 md:flex-row md:items-stretch md:gap-14">
-        {(["dark", "light"] as const).map((variant) => {
-          const scrollRef = variant === "dark" ? scrollRefDark : scrollRefLight;
-          const messageAreaBg = "bg-transparent";
-          const errorPillBg = variant === "dark" ? "bg-white/10 text-white/80" : "bg-slate-100 text-slate-500";
-          const hintText = variant === "dark" ? "text-white/50" : "text-slate-400";
+    <div className="h-dvh w-full overflow-hidden bg-slate-100 px-10 py-10">
+      <div
+        className="mx-auto w-full max-w-6xl overflow-hidden rounded-[44px] bg-slate-950 shadow-2xl ring-1 ring-black/10"
+        style={{ height: "min(780px, calc(100dvh - 80px))" }}
+      >
+        <div className="grid h-full grid-cols-2">
+          {/* LEFT (nav + chat) */}
+          <div className="relative h-full bg-gradient-to-b from-slate-950 to-slate-900">
+            <PanelHeader subtitle="GHAT YE2" />
 
-          return (
-            <PhoneShell key={variant} variant={variant}>
-              <div className="flex h-full flex-col">
-                <PhoneHeader variant={variant} />
+            <div className="flex h-[calc(100%-128px)] flex-col">
+              <div className="flex flex-1 gap-8 px-10">
+                <NavPanel />
 
-                <div className={`relative flex-1 px-6 ${messageAreaBg}`}>
+                <div className="flex min-w-0 flex-1 flex-col">
                   {error && (
-                    <div className="absolute left-0 right-0 top-2 flex justify-center">
-                      <div className={`rounded-md px-3 py-1 text-xs ${errorPillBg}`}>{error}</div>
+                    <div className="mb-3 flex justify-center">
+                      <div className="rounded-md bg-white/10 px-3 py-1 text-xs text-white/80">{error}</div>
                     </div>
                   )}
 
                   <div
-                    ref={scrollRef}
-                    className="h-full overflow-auto pb-6 pt-7"
+                    ref={scrollRefLeft}
+                    className="min-h-0 flex-1 overflow-auto pb-6"
                     style={{ scrollbarGutter: "stable" }}
                   >
                     {messages.length === 0 ? (
-                      <div className={`px-2 pt-10 text-center text-sm ${hintText}`}>
-                        Type a message to start.
-                      </div>
+                      <div className="pt-16 text-center text-sm text-white/45">Type a message to start.</div>
                     ) : (
-                      <div className="space-y-5">
+                      <div className="space-y-4 pt-2">
                         {messages.map((m) => (
-                          <ChatBubble key={`${variant}-${m.id}`} variant={variant} message={m} />
+                          <ChatBubble key={`left-${m.id}`} message={m} />
                         ))}
-
                         {sending && (
-                          <div className={`text-center text-xs ${hintText}`}>Assistant is typing…</div>
+                          <div className="text-center text-xs text-white/45">Assistant is typing…</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <BottomInput
+                input={input}
+                setInput={setInput}
+                sending={sending}
+                onSend={() => void handleSend()}
+              />
+            </div>
+          </div>
+
+          {/* RIGHT (chat + knowledge base) */}
+          <div className="relative h-full bg-gradient-to-b from-slate-900 to-slate-800">
+            <div className="absolute inset-y-0 left-0 w-px bg-white/10" />
+            <PanelHeader />
+
+            <div className="flex h-[calc(100%-128px)] flex-col">
+              <div className="flex flex-1 gap-8 px-10">
+                <div className="flex min-w-0 flex-1 flex-col">
+                  <div
+                    ref={scrollRefRight}
+                    className="min-h-0 flex-1 overflow-auto pb-6"
+                    style={{ scrollbarGutter: "stable" }}
+                  >
+                    {messages.length === 0 ? (
+                      <div className="pt-16 text-center text-sm text-white/45">Type a message to start.</div>
+                    ) : (
+                      <div className="space-y-4 pt-2">
+                        {messages.map((m) => (
+                          <ChatBubble key={`right-${m.id}`} message={m} />
+                        ))}
+                        {sending && (
+                          <div className="text-center text-xs text-white/45">Assistant is typing…</div>
                         )}
                       </div>
                     )}
                   </div>
                 </div>
 
-                <BottomBar
-                  variant={variant}
-                  input={input}
-                  setInput={setInput}
-                  sending={sending}
-                  onSend={() => void handleSend()}
-                  onConnectHuman={openMailTo}
-                />
+                <KnowledgeBasePanel hits={latestKbHits} />
               </div>
-            </PhoneShell>
-          );
-        })}
+
+              <BottomInput
+                input={input}
+                setInput={setInput}
+                sending={sending}
+                onSend={() => void handleSend()}
+              />
+            </div>
+          </div>
+        </div>
       </div>
 
       {showCrisis && (
