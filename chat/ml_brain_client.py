@@ -30,7 +30,7 @@ def _build_reply(pred: Dict[str, Any]) -> str:
 
 def predict(message: str, timeout_s: float = 6.0) -> Optional[Dict[str, Any]]:
     """Call mhchat-ml /predict and return the parsed JSON dict, or None on failure."""
-    base_url = os.environ.get("MHCHAT_ML_API_BASE", "http://localhost:8001").rstrip("/")
+    base_url = os.environ.get("MHCHAT_ML_API_BASE", "http://127.0.0.1:8001").rstrip("/")
     url = f"{base_url}/predict"
 
     payload = json.dumps({"message": message}).encode("utf-8")

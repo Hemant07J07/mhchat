@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 export async function GET() {
-  const baseUrl = process.env.MHCHAT_ML_API_BASE || "http://localhost:8001";
+  const baseUrl = process.env.MHCHAT_ML_API_BASE || "http://127.0.0.1:8001";
   const url = `${baseUrl.replace(/\/$/, "")}/docs`;
 
   try {
