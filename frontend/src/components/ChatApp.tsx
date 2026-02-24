@@ -1,12 +1,8 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRight, Search, Settings, Palette, Pipette, ChevronRight } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import { predictWithBrain } from "@/lib/mlBrain";
-
-/* ------------------------------------------------------------------ */
-/*  Types                                                              */
-/* ------------------------------------------------------------------ */
 
 type UiMessage = {
   id: string;
@@ -21,10 +17,6 @@ type UiMessage = {
 
 const MAX_HISTORY = 10;
 
-/* ------------------------------------------------------------------ */
-/*  Helpers                                                            */
-/* ------------------------------------------------------------------ */
-
 function formatTime(iso: string) {
   try {
     return new Date(iso).toLocaleTimeString([], {
@@ -36,113 +28,90 @@ function formatTime(iso: string) {
   }
 }
 
-/* ------------------------------------------------------------------ */
-/*  Left Sidebar                                                       */
-/* ------------------------------------------------------------------ */
-
-function Sidebar() {
+function PanelHeader({ subtitle }: { subtitle?: string }) {
   return (
-    <div className="flex w-[170px] shrink-0 flex-col justify-between py-6 pl-6 pr-3">
-      {/* top nav card */}
-      <div className="rounded-2xl bg-white/[0.06] p-3.5 ring-1 ring-white/[0.08]">
-        {/* header */}
-        <div className="mb-3 flex items-center justify-between">
-          <span className="text-[13px] font-semibold text-white/90">Home</span>
-          <Search size={13} className="text-white/40" />
+    <div className="relative px-10 pt-10 pb-4">
+      <div className="text-center text-3xl font-semibold tracking-tight text-white">mhchat</div>
+      {subtitle ? (
+        <div className="mt-4 text-center text-[10px] font-semibold tracking-[0.35em] text-white/55">
+          {subtitle}
         </div>
+      ) : null}
 
-        {/* links */}
-        <div className="space-y-1">
-          <SidebarItem label="Home" icon="🏠" />
-          <SidebarItem label="Profile" icon="👤" />
-          <SidebarItem label="Emergency Resources" highlight />
+      <div className="absolute right-6 top-6 flex items-center gap-2">
+        <div className="h-7 w-7 rounded-full bg-white/10" />
+        <div className="h-2 w-2 rounded-full bg-blue-500" />
+        <div className="h-2 w-2 rounded-full bg-blue-500" />
+        <div className="h-2 w-2 rounded-full bg-blue-500" />
+      </div>
+    </div>
+  );
+}
+
+function ChatBubble({ message }: { message: UiMessage }) {
+  const isUser = message.role === "user";
+
+  const botBubble = "bg-blue-500/90 text-white";
+  const userBubble = "bg-emerald-400/80 text-white";
+
+  return (
+    <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+      <div className={`max-w-[72%] ${isUser ? "text-right" : "text-left"}`}>
+        <div
+          className={`inline-block rounded-2xl px-4 py-2.5 text-[12px] leading-relaxed ${
+            isUser ? userBubble : botBubble
+          } ${isUser ? "rounded-br-md" : "rounded-bl-md"}`}
+        >
+          <div className="whitespace-pre-wrap">{message.text}</div>
         </div>
+        <div className="mt-1 text-[10px] text-white/35">{formatTime(message.createdAt)}</div>
+      </div>
+    </div>
+  );
+}
 
-        {/* dark‑mode toggle */}
-        <div className="mt-3 flex items-center justify-between rounded-lg px-2 py-1">
-          <span className="text-[10px] text-white/50">Dark</span>
-          <div className="h-[16px] w-[28px] rounded-full bg-emerald-500/70 p-[2px]">
-            <div className="ml-auto h-[12px] w-[12px] rounded-full bg-white shadow-sm" />
+function NavPanel() {
+  return (
+    <div className="w-[200px] shrink-0">
+      <div className="rounded-2xl bg-white/6 p-4 ring-1 ring-white/10">
+        <div className="text-[11px] font-semibold text-white/70">Home</div>
+        <div className="mt-3 space-y-2">
+          <div className="rounded-lg bg-white/5 px-3 py-2 text-[12px] text-white/70">Home</div>
+          <div className="rounded-lg bg-white/5 px-3 py-2 text-[12px] text-white/70">Profile</div>
+          <div className="rounded-lg bg-amber-400/25 px-3 py-2 text-[12px] font-semibold text-amber-200 ring-1 ring-amber-200/30">
+            Emergency Response
+          </div>
+          <div className="rounded-lg bg-white/5 px-3 py-2 text-[12px] text-white/70">Settings</div>
+        </div>
+        <div className="mt-5 flex items-center justify-between">
+          <div className="text-[11px] text-white/50"> </div>
+          <div className="h-5 w-9 rounded-full bg-emerald-400/60 p-[2px]">
+            <div className="h-4 w-4 rounded-full bg-white/90" />
           </div>
         </div>
       </div>
-
-      {/* bottom settings card */}
-      <div className="mt-3 rounded-2xl bg-white/[0.06] p-3.5 ring-1 ring-white/[0.08]">
-        <div className="space-y-1">
-          <SidebarItem label="Customize Theme" icon={<Palette size={11} />} />
-          <SidebarItem label="Colors" icon={<Pipette size={11} />} />
-          <SidebarItem label="Settings" icon={<Settings size={11} />} />
-        </div>
-      </div>
     </div>
   );
 }
-
-function SidebarItem({
-  label,
-  icon,
-  highlight,
-}: {
-  label: string;
-  icon?: React.ReactNode;
-  highlight?: boolean;
-}) {
-  return (
-    <div
-      className={`flex items-center gap-2 rounded-lg px-2 py-1.5 text-[11px] ${
-        highlight
-          ? "bg-amber-400/20 font-semibold text-amber-200 ring-1 ring-amber-300/30"
-          : "text-white/55 hover:bg-white/[0.04]"
-      }`}
-    >
-      {icon && <span className="text-[10px]">{icon}</span>}
-      <span className="truncate">{label}</span>
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/*  Right Knowledge Base panel                                         */
-/* ------------------------------------------------------------------ */
 
 function KnowledgeBasePanel({ hits }: { hits: string[] }) {
-  const defaults = [
-    { title: "Coping with Anxiety", sub: "tips, tricks, lifestyle" },
-    { title: "Mindfulness Concepts", sub: "meditation, focus" },
-    { title: "Mindfulness Courses", sub: "step-by-step guide" },
-  ];
-
   const items = hits.length
-    ? hits.slice(0, 4).map((t) => ({ title: t, sub: "" }))
-    : defaults;
+    ? hits.slice(0, 4)
+    : [
+        "Coping with Anxiety",
+        "Mindfulness",
+        "Breathing exercises",
+        "Grounding technique",
+      ];
 
   return (
-    <div className="flex w-[185px] shrink-0 flex-col py-6 pl-3 pr-6">
-      <div className="rounded-2xl bg-white/[0.06] p-3.5 ring-1 ring-white/[0.08]">
-        <div className="mb-3 flex items-center justify-between">
-          <span className="text-[12px] font-semibold text-white/90">Knowledge Base</span>
-          <ChevronRight size={13} className="text-white/40" />
-        </div>
-
-        {/* browse pill */}
-        <button
-          type="button"
-          className="mb-3 rounded-full bg-white/[0.08] px-3 py-1 text-[10px] text-white/55 ring-1 ring-white/[0.08]"
-        >
-          Browse
-        </button>
-
-        <div className="space-y-2">
-          {items.map((item, i) => (
-            <div
-              key={i}
-              className="rounded-lg bg-white/[0.05] px-3 py-2 ring-1 ring-white/[0.06]"
-            >
-              <div className="text-[11px] font-medium text-white/75">{item.title}</div>
-              {item.sub && (
-                <div className="mt-0.5 text-[9px] text-white/30">{item.sub}</div>
-              )}
+    <div className="w-[210px] shrink-0">
+      <div className="rounded-2xl bg-white/6 p-4 ring-1 ring-white/10">
+        <div className="text-[11px] font-semibold text-white/70">Knowledge Base</div>
+        <div className="mt-3 space-y-2">
+          {items.map((t, i) => (
+            <div key={`${t}-${i}`} className="rounded-lg bg-white/5 px-3 py-2 text-[12px] text-white/70">
+              {t}
             </div>
           ))}
         </div>
@@ -151,34 +120,46 @@ function KnowledgeBasePanel({ hits }: { hits: string[] }) {
   );
 }
 
-/* ------------------------------------------------------------------ */
-/*  Chat bubble                                                        */
-/* ------------------------------------------------------------------ */
-
-function ChatBubble({ message }: { message: UiMessage }) {
-  const isUser = message.role === "user";
-
+function BottomInput({
+  input,
+  setInput,
+  sending,
+  onSend,
+}: {
+  input: string;
+  setInput: (v: string) => void;
+  sending: boolean;
+  onSend: () => void;
+}) {
   return (
-    <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
-      <div className={`max-w-[75%] ${isUser ? "text-right" : "text-left"}`}>
-        <div
-          className={`inline-block rounded-2xl px-4 py-2 text-[12px] leading-relaxed ${
-            isUser
-              ? "rounded-br-md bg-emerald-400/60 text-white"
-              : "rounded-bl-md bg-blue-500/70 text-white"
-          }`}
+    <div className="flex items-center gap-3">
+      <div className="flex flex-1 items-center gap-3 rounded-full bg-white/6 px-4 py-2 ring-1 ring-white/10">
+        <input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              onSend();
+            }
+          }}
+          disabled={sending}
+          placeholder="Type your message..."
+          className="min-w-0 flex-1 bg-transparent text-[12px] text-white placeholder:text-white/35 outline-none"
+        />
+        <button
+          type="button"
+          onClick={onSend}
+          disabled={sending || !input.trim()}
+          className="text-white/60 hover:text-white disabled:opacity-40"
+          title="Send"
         >
-          <div className="whitespace-pre-wrap">{message.text}</div>
-        </div>
-        <div className="mt-0.5 text-[9px] text-white/25">{formatTime(message.createdAt)}</div>
+          <ArrowRight size={18} />
+        </button>
       </div>
     </div>
   );
 }
-
-/* ------------------------------------------------------------------ */
-/*  Main component                                                     */
-/* ------------------------------------------------------------------ */
 
 export default function ChatApp() {
   const [messages, setMessages] = useState<UiMessage[]>([]);
@@ -188,35 +169,32 @@ export default function ChatApp() {
   const [showCrisis, setShowCrisis] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const supportEmail = (
-    process.env.NEXT_PUBLIC_HUMAN_SUPPORT_EMAIL || "support@example.com"
-  ).trim();
+  const supportEmail =
+    (process.env.NEXT_PUBLIC_HUMAN_SUPPORT_EMAIL || "support@example.com").trim();
 
-  const historyForBrain = useMemo(
-    () =>
-      messages.slice(-MAX_HISTORY).map((m) => ({ role: m.role, content: m.text })),
-    [messages]
-  );
+  const historyForBrain = useMemo(() => {
+    return messages
+      .slice(-MAX_HISTORY)
+      .map((m) => ({ role: m.role, content: m.text }));
+  }, [messages]);
 
-  /* auto‑scroll */
   useEffect(() => {
-    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
   }, [messages, sending]);
 
-  /* latest KB hits for the right panel */
   const latestKbHits = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i--) {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
       const m = messages[i];
-      if (m.role === "assistant" && Array.isArray(m.kb_hits) && m.kb_hits.length)
-        return m.kb_hits;
+      if (m.role === "assistant" && Array.isArray(m.kb_hits) && m.kb_hits.length) return m.kb_hits;
     }
     return [] as string[];
   }, [messages]);
 
-  /* ---- send ---- */
   async function handleSend() {
     const text = input.trim();
     if (!text || sending) return;
+
     setError(null);
     setInput("");
     setSending(true);
@@ -227,6 +205,7 @@ export default function ChatApp() {
       text,
       createdAt: new Date().toISOString(),
     };
+
     setMessages((prev) => [...prev, userMsg]);
 
     try {
@@ -249,9 +228,10 @@ export default function ChatApp() {
         intent: result.intent,
         intent_score: result.intent_score,
       };
+
       setMessages((prev) => [...prev, botMsg]);
       if (result.crisis) setShowCrisis(true);
-    } catch (e: unknown) {
+    } catch (e: any) {
       setError(e instanceof Error ? e.message : "Failed to get response");
     } finally {
       setSending(false);
@@ -261,125 +241,89 @@ export default function ChatApp() {
   function openMailTo() {
     const subject = encodeURIComponent("MHChat: connect to a human");
     const body = encodeURIComponent(
-      "Hi, I'd like to connect to a human for support.\n\n(You can optionally paste relevant context here.)"
+      "Hi, I’d like to connect to a human for support.\n\n(You can optionally paste relevant context here.)"
     );
     window.location.href = `mailto:${supportEmail}?subject=${subject}&body=${body}`;
   }
 
-  /* ---- render ---- */
   return (
-    <div className="flex h-dvh w-full items-center justify-center overflow-hidden bg-slate-200/80 p-6">
-      {/* outer rounded card */}
+    <div className="h-dvh w-full overflow-hidden bg-slate-100 px-10 py-10">
       <div
-        className="flex w-full max-w-[1100px] overflow-hidden rounded-[36px] bg-[#1a1a20] shadow-2xl ring-1 ring-white/[0.06]"
-        style={{ height: "min(680px, calc(100dvh - 48px))" }}
+        className="mx-auto w-full max-w-6xl overflow-hidden rounded-[44px] bg-slate-950 shadow-2xl ring-1 ring-black/10"
+        style={{ height: "min(780px, calc(100dvh - 80px))" }}
       >
-        {/* ===== LEFT SIDEBAR ===== */}
-        <Sidebar />
+        <div className="relative h-full bg-gradient-to-b from-slate-950 via-slate-900 to-slate-900">
+          <PanelHeader subtitle="" />
 
-        {/* ===== CENTER CHAT ===== */}
-        <div className="flex min-w-0 flex-1 flex-col">
-          {/* header */}
-          <div className="px-8 pt-7 pb-2 text-center">
-            <div className="text-2xl font-semibold tracking-tight text-white">mhchat</div>
-          </div>
+          <div className="flex h-[calc(100%-128px)] flex-col">
+            <div className="flex flex-1 gap-8 px-10">
+              <NavPanel />
 
-          {/* messages area */}
-          <div className="relative flex-1 px-8">
-            {error && (
-              <div className="absolute inset-x-0 top-1 z-10 flex justify-center">
-                <div className="rounded-md bg-white/10 px-3 py-1 text-[11px] text-white/70">
-                  {error}
-                </div>
-              </div>
-            )}
+              <div className="flex min-w-0 flex-1 flex-col">
+                {error && (
+                  <div className="mb-3 flex justify-center">
+                    <div className="rounded-md bg-white/10 px-3 py-1 text-xs text-white/80">{error}</div>
+                  </div>
+                )}
 
-            <div
-              ref={scrollRef}
-              className="h-full overflow-y-auto pb-3 pt-3"
-              style={{ scrollbarGutter: "stable" }}
-            >
-              {messages.length === 0 ? (
-                <div className="flex h-full items-center justify-center text-sm text-white/30">
-                  Type a message to start.
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {messages.map((m) => (
-                    <ChatBubble key={m.id} message={m} />
-                  ))}
-                  {sending && (
-                    <div className="text-center text-[11px] text-white/35">
-                      Assistant is typing…
+                <div
+                  ref={scrollRef}
+                  className="min-h-0 flex-1 overflow-auto pb-6"
+                  style={{ scrollbarGutter: "stable" }}
+                >
+                  {messages.length === 0 ? (
+                    <div className="pt-16 text-center text-sm text-white/45">Type a message to start.</div>
+                  ) : (
+                    <div className="space-y-4 pt-2">
+                      {messages.map((m) => (
+                        <ChatBubble key={m.id} message={m} />
+                      ))}
+                      {sending && (
+                        <div className="text-center text-xs text-white/45">Assistant is typing…</div>
+                      )}
                     </div>
                   )}
                 </div>
-              )}
+              </div>
+
+              <KnowledgeBasePanel hits={latestKbHits} />
             </div>
-          </div>
 
-          {/* dots indicator */}
-          <div className="flex justify-center gap-1.5 py-1.5">
-            <span className="h-[4px] w-[4px] rounded-full bg-white/25" />
-            <span className="h-[4px] w-[4px] rounded-full bg-white/25" />
-            <span className="h-[4px] w-[4px] rounded-full bg-white/25" />
-            <span className="h-[4px] w-[4px] rounded-full bg-white/25" />
-          </div>
-
-          {/* input bar */}
-          <div className="px-8 pb-6">
-            <div className="flex items-center gap-2 rounded-full bg-white/[0.06] px-4 py-2 ring-1 ring-white/[0.08]">
-              <input
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    handleSend();
-                  }
-                }}
-                disabled={sending}
-                placeholder="Type your message..."
-                className="min-w-0 flex-1 bg-transparent text-[12px] text-white placeholder:text-white/25 outline-none"
-              />
-              <button
-                type="button"
-                onClick={() => void handleSend()}
-                disabled={sending || !input.trim()}
-                className="flex h-6 w-6 items-center justify-center rounded-full text-white/45 hover:text-white disabled:opacity-30"
-                title="Send"
-              >
-                <ArrowRight size={15} />
-              </button>
+            <div className="flex items-center gap-8 px-10 pb-8">
+              <div className="w-[200px] shrink-0" />
+              <div className="min-w-0 flex-1">
+                <BottomInput
+                  input={input}
+                  setInput={setInput}
+                  sending={sending}
+                  onSend={() => void handleSend()}
+                />
+              </div>
+              <div className="w-[210px] shrink-0" />
             </div>
           </div>
         </div>
-
-        {/* ===== RIGHT KNOWLEDGE BASE ===== */}
-        <KnowledgeBasePanel hits={latestKbHits} />
       </div>
 
-      {/* ===== Crisis modal ===== */}
       {showCrisis && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-[#1a1a20] p-6 text-white shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-background w-full max-w-lg rounded-lg border border-border p-5">
             <div className="text-lg font-semibold">Immediate support</div>
-            <div className="mt-2 text-sm text-white/55">
-              If you feel like you might harm yourself or someone else, please call
-              your local emergency number right now. If you can, reach out to a
-              trusted person and don&apos;t stay alone.
+            <div className="text-muted-foreground mt-2 text-sm">
+              If you feel like you might harm yourself or someone else, please call your local emergency number
+              right now. If you can, reach out to a trusted person and don’t stay alone.
             </div>
-            <div className="mt-5 flex flex-wrap gap-2">
+            <div className="mt-4 flex flex-wrap gap-2">
               <button
                 onClick={openMailTo}
-                className="rounded-lg bg-blue-500 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-600"
+                className="bg-primary text-primary-foreground rounded-md px-3 py-2 text-sm font-semibold"
                 type="button"
               >
                 Connect to human
               </button>
               <button
                 onClick={() => setShowCrisis(false)}
-                className="rounded-lg border border-white/15 px-4 py-2 text-sm text-white/65 hover:bg-white/5"
+                className="rounded-md border border-input px-3 py-2 text-sm"
                 type="button"
               >
                 Dismiss
