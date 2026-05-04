@@ -26,8 +26,16 @@ SECRET_KEY = os.environ.get("SECRET_KEY", "django-insecure-change-me-for-dev")
 # DEBUG: environment or default True for local dev
 DEBUG = os.environ.get("DEBUG", "True").lower() in ("1", "true", "yes")
 
-# ALLOWED_HOSTS from env (comma separated)
-ALLOWED_HOSTS = [h.strip() for h in os.environ.get("ALLOWED_HOSTS", "localhost,127.0.0.1,localhost:3000,localhost:8000").split(",") if h.strip()]
+# ALLOWED_HOSTS from env (comma separated), plus Render hostname if provided.
+_allowed_hosts_env = os.environ.get(
+    "ALLOWED_HOSTS",
+    "localhost,127.0.0.1,localhost:3000,localhost:8000,mhchat.onrender.com",
+)
+ALLOWED_HOSTS = [h.strip() for h in _allowed_hosts_env.split(",") if h.strip()]
+
+_render_hostname = os.environ.get("RENDER_EXTERNAL_HOSTNAME", "").strip()
+if _render_hostname and _render_hostname not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append(_render_hostname)
 
 # ------- Apps & REST -------
 INSTALLED_APPS = [
