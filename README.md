@@ -73,6 +73,39 @@ Note: the ML service lives in a sibling folder/repo: `../mhchat-ml`.
 
 You also need the **mhchat-ml** service available (see “Run mhchat-ml”).
 
+### Quickstart (local dev)
+
+Open three terminals from the repo root:
+
+**Terminal 1 - Backend**
+```bash
+python -m venv venv
+source venv/Scripts/activate  # On Windows
+# or
+source venv/bin/activate      # On macOS/Linux
+pip install -r requirements.txt
+python manage.py migrate
+python manage.py runserver
+```
+
+**Terminal 2 - Frontend**
+```bash
+cd frontend
+npm install
+cp .env.example .env.local  # If available
+npm run dev
+```
+
+**Terminal 3 - ML service**
+```powershell
+python -m uvicorn src.api.main:app --reload --port 8001
+```
+
+Services:
+- Django backend: http://localhost:8000
+- Next.js frontend: http://localhost:3000
+- mhchat-ml: http://localhost:8001 (docs at http://127.0.0.1:8001/docs)
+
 ### Backend Setup
 
 1. Clone the repository:

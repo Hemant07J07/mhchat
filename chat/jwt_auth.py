@@ -19,23 +19,18 @@ class JwtAuthMiddleware:
     def __init__(self, inner):
         self.inner = inner
 
-    def __call__(self, scope):
-        return JwtAuthMiddlewareInstance(scope, self.inner)
-    
-class JwtAuthMiddlewareInstance:
-    def __init__(self, scope, inner):
-        self.scope = dict(scope)
-        self.inner = inner
-
-    async def __call__(self, receive, send):
-        qs = parse_qs(self.scope.get("query_string", b"").decode())
+    async def __call__(self, scope, receive, send):
+        qs = parse_qs(scope.get("query_string", b"").decode())
         token = qs.get("token", [None])[0]
+        scope['user'] = AnonymousUser()  # default
+        
         if token:
             try:
                 access = AccessToken(token)
                 user_id = access.get("user_id") or access.get("user")
                 if user_id:
-                    self.scope['user'] = await get_user(user_id)
+                    scope['user'] = await get_user(user_id)
             except TokenError:
-                self.scope['user'] = AnonymousUser()
-            return await self.inner(self.scope, receive, send)
+                pass
+                
+        return await self.inner(scope, receive, send)

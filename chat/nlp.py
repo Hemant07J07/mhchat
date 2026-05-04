@@ -11,9 +11,11 @@ import re
 _NEG_WORDS = {"sad","down","depressed","unhappy","hopeless","miserable","terrible","bad","alone","lonely","worthless"}
 _POS_WORDS = {"good","happy","great","okay","fine","relieved","better","well","ok","better"}
 _SUICIDAL_PATTERNS = [
+    r"\bkill\s+my\s*self\b",
     r"\bkill myself\b",
     r"\bi want to die\b",
     r"\bi'm going to kill myself\b",
+    r"\bi am going to kill myself\b",
     r"\bi want to end my life\b",
     r"\bsuicid(e|al)\b",
     r"\bend my life\b",
@@ -21,14 +23,26 @@ _SUICIDAL_PATTERNS = [
     r"\bhang myself\b",
     r"\boverdose\b"
 ]
-_CRISIS_WORDS = {"suicide","die","kill myself","end my life","hang myself","overdose","not worth living"}
+_CRISIS_WORDS = {
+    "suicide",
+    "die",
+    "kill myself",
+    "kill my self",
+    "end my life",
+    "hang myself",
+    "overdose",
+    "not worth living",
+}
 
 _GREETINGS = {"hello","hi","hey","good morning","good evening","good afternoon","hiya"}
 
 _URGENCY_WORDS = {"now","today","immediately","right now","already","this minute","tonight","soon","plan","planned","going to","tomorrow"}
 
 def _normalize(text):
-    return (text or "").lower().strip()
+    t = (text or "").lower().strip()
+    # Normalize common spacing variants like "my self" -> "myself".
+    t = t.replace("my self", "myself")
+    return t
 
 def analyze_message(text):
     t = _normalize(text)
@@ -86,6 +100,8 @@ def safety_check(text, nlp_meta=None):
         flagged = True
         # if urgency words present -> high
         if any(uw in t for uw in _URGENCY_WORDS):
+            severity = "high"
+        elif "i want to kill myself" in t or "i am going to kill myself" in t:
             severity = "high"
         else:
             severity = "medium"

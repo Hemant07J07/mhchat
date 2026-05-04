@@ -7,8 +7,7 @@ from .views import (
     register_user,
     login_user,
     logout_user,
-    get_user_profile,
-    update_user_profile,
+    user_profile,
     accept_consent,
 )
 from django.views.generic import TemplateView
@@ -35,8 +34,7 @@ urlpatterns = [
     path('api/auth/logout/', logout_user, name='logout'),
     
     # Profile routes
-    path('api/profile/', get_user_profile, name='get-profile'),
-    path('api/profile/update/', update_user_profile, name='update-profile'),
+    path('api/profile/', user_profile, name='user-profile'),
     path('api/profile/accept-consent/', accept_consent, name='accept-consent'),
     
     # Dashboard stats

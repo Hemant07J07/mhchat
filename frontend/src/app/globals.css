@@ -1,6 +1,4 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
 
 ::-webkit-scrollbar-track {
   background-color: transparent;
@@ -100,10 +98,10 @@
   }
   body {
     background:
-      radial-gradient(1200px 600px at 15% -10%, rgba(56, 189, 248, 0.16), transparent 60%),
-      radial-gradient(1000px 500px at 90% 0%, rgba(14, 116, 144, 0.14), transparent 55%),
-      hsl(var(--background));
-    color: hsl(var(--foreground));
+      radial-gradient(1200px 700px at 15% -10%, rgba(59, 130, 246, 0.18), transparent 60%),
+      radial-gradient(900px 600px at 85% 0%, rgba(16, 185, 129, 0.12), transparent 55%),
+      #050505;
+    color: #f8fafc;
     font-family: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system,
       "Segoe UI", sans-serif;
   }

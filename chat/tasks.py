@@ -3,14 +3,20 @@
 
 Behavior:
 - On each user message, we run local safety checks.
-- If flagged -> create a system message and (optionally) email admins on high severity.
-- If not flagged -> call mhchat-ml (/predict) to get KB hits + crisis flag and generate a safe reply.
-- If mhchat-ml is unavailable -> fall back to the local rule-based generator.
+- If flagged -> create a system message and queue admin email in background.
+- If not flagged -> call mhchat-ml (/predict) with retry logic for KB hits + crisis flag.
+- If mhchat-ml unavailable -> fall back to local rule-based generator.
 
-This module is intentionally synchronous to avoid Celery/Redis dependencies.
+This module uses threading for non-blocking email sending to avoid blocking chat responses.
+Request deduplication prevents duplicate messages within 5-second window.
 """
 
+import hashlib
 import logging
+import threading
+from collections import defaultdict
+from threading import Thread
+from time import sleep, time as current_time
 
 from django.conf import settings
 from django.core.mail import send_mail
@@ -21,6 +27,53 @@ from .nlp import analyze_message, safety_check, generate_bot_response as generat
 from .ml_brain_client import predict as ml_predict
 
 logger = logging.getLogger(__name__)
+
+# Request deduplication: track (user_id, message_hash) with timestamp
+# Clean up after 5 seconds
+_dedup_cache = defaultdict(dict)  # {user_id: {msg_hash: timestamp}}
+_dedup_lock = threading.Lock()
+
+def _get_message_hash(text: str) -> str:
+    """Generate hash of message text for deduplication."""
+    return hashlib.md5(text.encode()).hexdigest()
+
+def _should_process_message(user_id: int, message_text: str, window_seconds: int = 5) -> bool:
+    """
+    Check if message should be processed (not duplicate within window).
+    
+    Args:
+        user_id: User who sent the message
+        message_text: Message content
+        window_seconds: Deduplication window (default 5 seconds)
+    
+    Returns:
+        True if message is new/different, False if duplicate
+    """
+    msg_hash = _get_message_hash(message_text)
+    current_t = current_time()
+    
+    with _dedup_lock:
+        user_cache = _dedup_cache[user_id]
+        
+        # Check if we've seen this exact message recently
+        if msg_hash in user_cache:
+            last_time = user_cache[msg_hash]
+            if current_t - last_time < window_seconds:
+                logger.warning(f"Duplicate message detected for user {user_id}: hash={msg_hash}, age={current_t - last_time:.2f}s")
+                return False  # Duplicate - skip processing
+            else:
+                # Expired - remove old entry and process as new
+                del user_cache[msg_hash]
+        
+        # New/valid message - record it and process
+        user_cache[msg_hash] = current_t
+        
+        # Clean up old entries (simple approach: remove anything older than window)
+        expired = [h for h, t in user_cache.items() if current_t - t >= window_seconds]
+        for h in expired:
+            del user_cache[h]
+        
+        return True  # Process this message
 
 # Channels availability (optional)
 try:
@@ -64,15 +117,43 @@ def _broadcast_message(message_obj: Message):
     except Exception:
         logger.exception("Failed to broadcast message id=%s", getattr(message_obj, "id", None))
 
+def _collect_attachment_context(msg: Message) -> str:
+    """Build a short text context from uploaded attachments."""
+    try:
+        attachments = list(msg.attachments.all())
+    except Exception:
+        return ""
+
+    parts = []
+    for att in attachments:
+        text = (att.text_content or "").strip()
+        if not text:
+            continue
+        parts.append(f"[Attachment: {att.file_name}]\n{text}")
+
+    if not parts:
+        return ""
+
+    return "\n\n".join(parts)
+
+
+def _build_message_text(msg: Message) -> str:
+    base = msg.text or ""
+    attachment_text = _collect_attachment_context(msg)
+    if not attachment_text:
+        return base
+    return f"{base}\n\n{attachment_text}".strip()
+
+
 def _generate_bot_reply_and_create_message(msg: Message) -> Message:
     """
     Build short history, call LLM (via safe wrapper) or fallback, create bot Message,
     store optional embedding and broadcast. Returns created Message.
     """
-    user_text = msg.text or ""
+    user_text = _build_message_text(msg)
 
-    # Try mhchat-ml first
-    pred = ml_predict(user_text)
+    # Try mhchat-ml first, passing conversation context
+    pred = ml_predict(user_text, conversation_id=msg.conversation.id)
     if pred and isinstance(pred, dict) and pred.get("reply"):
         bot_text = str(pred.get("reply"))
         # attach ML output as metadata to the USER message for traceability
@@ -113,7 +194,13 @@ def _handle_user_message_logic(message_id):
         logger.debug("Skipping non-user message %s (sender=%s)", message_id, msg.sender)
         return {"status": "skipped_non_user", "message_id": message_id}
 
-    text = msg.text or ""
+    text = _build_message_text(msg)
+    user_id = msg.conversation.user.id if msg.conversation.user else None
+    
+    # Check for duplicate messages within 5-second window
+    if user_id and not _should_process_message(user_id, text):
+        logger.warning("Message %s rejected as duplicate (user %s)", message_id, user_id)
+        return {"status": "duplicate", "message_id": message_id}
 
     # 1) NLU analysis
     try:
@@ -161,11 +248,19 @@ def _handle_user_message_logic(message_id):
                 f"Time: {timezone.now().isoformat()}\n"
             )
             recipient_list = [a[1] for a in getattr(settings, "ADMINS", [])] or [getattr(settings, "DEFAULT_FROM_EMAIL", "admin@example.com")]
-            try:
-                send_mail(subject, body, getattr(settings, "DEFAULT_FROM_EMAIL", "mhchat@example.com"), recipient_list, fail_silently=False)
-                logger.info("Escalation email sent for message %s to %s", message_id, recipient_list)
-            except Exception:
-                logger.exception("Failed to send escalation email for message %s", message_id)
+            
+            # Send email in background thread to avoid blocking chat responses
+            def send_email_async():
+                try:
+                    send_mail(subject, body, getattr(settings, "DEFAULT_FROM_EMAIL", "mhchat@example.com"), recipient_list, fail_silently=False)
+                    logger.info("Escalation email sent for message %s to %s", message_id, recipient_list)
+                except Exception:
+                    logger.exception("Failed to send escalation email for message %s", message_id)
+            
+            # Start email send in background without blocking
+            email_thread = Thread(target=send_email_async, daemon=True)
+            email_thread.start()
+            logger.info("Escalation email queued for background send (message %s)", message_id)
 
         return {"status": "flagged", "severity": severity, "message_id": message_id}
 

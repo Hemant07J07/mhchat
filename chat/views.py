@@ -2,12 +2,14 @@
 from rest_framework import viewsets, permissions, status
 from rest_framework.response import Response
 from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from django.shortcuts import get_object_or_404
 from django.db import transaction
 from django.contrib.auth.models import User
 
-from .models import Conversation, Message, UserProfile
+from .models import Conversation, Message, UserProfile, MessageAttachment
 from .serializers import ConversationSerializer, MessageSerializer
+from .attachments import extract_text_from_attachment
 from .tasks import handle_user_message
 
 # Default app-level permission; you can override per-viewset as needed.
@@ -45,6 +47,7 @@ class MessageViewSet(viewsets.ModelViewSet):
     """
     serializer_class = MessageSerializer
     permission_classes = [permissions.IsAuthenticated]
+    parser_classes = (MultiPartParser, FormParser, JSONParser)
 
     def get_queryset(self):
         # Allow filtering by conversation via query param or nested route kwarg
@@ -84,7 +87,7 @@ class MessageViewSet(viewsets.ModelViewSet):
             )
         
         # Add conversation to request data for serializer
-        request_data = dict(request.data)
+        request_data = request.data.copy()
         request_data['conversation'] = conv.id
         
         serializer = self.get_serializer(data=request_data)
@@ -96,6 +99,31 @@ class MessageViewSet(viewsets.ModelViewSet):
         # Use transaction to ensure save + enqueue consistency (worker may run sync fallback).
         with transaction.atomic():
             message = serializer.save(nlp_metadata={}, is_flagged=False)
+
+            files = request.FILES.getlist("files")
+            attachments = []
+            for upload in files:
+                attachment = MessageAttachment.objects.create(
+                    message=message,
+                    file=upload,
+                    file_name=getattr(upload, "name", "attachment"),
+                    content_type=getattr(upload, "content_type", ""),
+                    file_size=getattr(upload, "size", 0) or 0,
+                )
+                attachments.append(attachment)
+
+            for attachment in attachments:
+                try:
+                    extracted = extract_text_from_attachment(
+                        attachment.file.path,
+                        attachment.content_type,
+                        attachment.file_name,
+                    )
+                    if extracted:
+                        attachment.text_content = extracted
+                        attachment.save(update_fields=["text_content"])
+                except Exception:
+                    pass
 
             # Synchronous execution (no Celery dependency)
             try:
@@ -261,45 +289,48 @@ def logout_user(request):
 
 
 # Profile endpoints
-@api_view(['GET'])
-@permission_classes([permissions.IsAuthenticated])
-def get_user_profile(request):
-    """Get current user profile."""
+
+def _get_profile_response(request):
+    """Helper to build profile response."""
     user = request.user
     profile = UserProfile.objects.get_or_create(user=user)[0]
-
-    return Response(
-        {
-            "user": {
-                "id": user.id,
-                "username": user.username,
-                "email": user.email,
-                "first_name": user.first_name,
-                "last_name": user.last_name,
-            },
-            "profile": {
-                "consent_given": profile.consent_given,
-                "phone": profile.phone,
-                "timezone": profile.timezone,
-                "created_at": profile.created_at,
-            },
+    return {
+        "user": {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
         },
-        status=status.HTTP_200_OK,
-    )
+        "profile": {
+            "consent_given": profile.consent_given,
+            "phone": profile.phone,
+            "timezone": profile.timezone,
+            "created_at": profile.created_at,
+        },
+    }
 
 
-@api_view(['PATCH', 'PUT'])
+@api_view(['GET', 'PATCH', 'PUT'])
 @permission_classes([permissions.IsAuthenticated])
-def update_user_profile(request):
-    """Update current user profile."""
+def user_profile(request):
+    """
+    GET: Retrieve current user profile
+    PATCH/PUT: Update current user profile
+    """
     user = request.user
     profile = UserProfile.objects.get_or_create(user=user)[0]
 
-    # Update user fields
+    if request.method == 'GET':
+        return Response(_get_profile_response(request), status=status.HTTP_200_OK)
+    
+    # PATCH/PUT: Update profile
     if 'first_name' in request.data:
         user.first_name = request.data['first_name']
     if 'last_name' in request.data:
         user.last_name = request.data['last_name']
+    if 'email' in request.data:
+        user.email = request.data['email']
     user.save()
 
     # Update profile fields
@@ -309,7 +340,22 @@ def update_user_profile(request):
         profile.timezone = request.data['timezone']
     profile.save()
 
-    return Response(get_user_profile(request).data, status=status.HTTP_200_OK)
+    return Response(_get_profile_response(request), status=status.HTTP_200_OK)
+
+
+# Legacy: Keep old functions for backwards compatibility
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def get_user_profile(request):
+    """Get current user profile. (Legacy - use /api/profile/ instead)"""
+    return Response(_get_profile_response(request), status=status.HTTP_200_OK)
+
+
+@api_view(['PATCH', 'PUT'])
+@permission_classes([permissions.IsAuthenticated])
+def update_user_profile(request):
+    """Update current user profile. (Legacy - use /api/profile/ instead)"""
+    return user_profile(request)
 
 
 @api_view(['POST'])

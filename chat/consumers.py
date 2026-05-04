@@ -1,6 +1,8 @@
 import logging
 import asyncio
+from collections import defaultdict
 from datetime import datetime
+from threading import Lock
 
 from .tasks import handle_user_message
 
@@ -13,6 +15,11 @@ from .serializers import MessageSerializer
 
 logger = logging.getLogger(__name__)
 
+# Global per-user rate limiting (persists across reconnections)
+# Format: {user_id: [timestamp1, timestamp2, ...]}
+_global_user_rate_limits = defaultdict(list)
+_rate_limit_lock = Lock()
+
 
 class ChatConsumer(AsyncJsonWebsocketConsumer):
     """
@@ -21,9 +28,10 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
     - On connect: validates user + conversation access, sends recent messages
     - receive_json: supports "send_message" and "ping"
     - chat_message: handler for group sends (type="chat_message")
+    - Per-user rate limiting: 6 messages per 10 seconds (persists across reconnections via _global_user_rate_limits)
     """
 
-    # per-connection rate-limit settings
+    # per-user rate-limit settings
     RATE_LIMIT_COUNT = 6          # messages
     RATE_LIMIT_PERIOD = 10        # seconds
 
@@ -37,15 +45,15 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         # Keep group name consistent with tasks/channel_send code
         self.group_name = f"conversation_{self.conv_id}"
 
-        # in-memory per-connection rate limiting state
-        self._recent_msg_timestamps = []
-
         # Auth check (JwtAuthMiddleware should set scope['user'])
         user = self.scope.get("user")
         if not user or getattr(user, "is_anonymous", True):
             logger.info("connect: anonymous connection rejected for conv %s", self.conv_id)
             await self.close(code=4003)
             return
+
+        # Store user_id for rate limiting
+        self.user_id = user.id
 
         # Verify conversation exists and user has access (DB check)
         try:
@@ -100,23 +108,30 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
                     await self.send_json({"type": "error", "error": "message_too_long"})
                     return
 
-                # simple per-connection rate limiter
+                # Global per-user rate limiter (persists across reconnections)
                 now = datetime.utcnow()
-                self._recent_msg_timestamps = [
-                    ts for ts in self._recent_msg_timestamps
-                    if (now - ts).total_seconds() < self.RATE_LIMIT_PERIOD
-                ]
-                if len(self._recent_msg_timestamps) >= self.RATE_LIMIT_COUNT:
-                    await self.send_json({"type": "error", "error": "rate_limited"})
-                    return
-                self._recent_msg_timestamps.append(now)
+                with _rate_limit_lock:
+                    # Clean old timestamps outside the window
+                    _global_user_rate_limits[self.user_id] = [
+                        ts for ts in _global_user_rate_limits[self.user_id]
+                        if (now - ts).total_seconds() < self.RATE_LIMIT_PERIOD
+                    ]
+                    
+                    # Check if user has exceeded rate limit
+                    if len(_global_user_rate_limits[self.user_id]) >= self.RATE_LIMIT_COUNT:
+                        logger.warning(f"User {self.user_id} rate limited: {len(_global_user_rate_limits[self.user_id])} messages in {self.RATE_LIMIT_PERIOD}s")
+                        await self.send_json({"type": "error", "error": "rate_limited"})
+                        return
+                    
+                    # Record this message timestamp
+                    _global_user_rate_limits[self.user_id].append(now)
 
                 # create message in DB (sync -> async)
                 user = self.scope.get("user")
                 created = await self._create_message(self.conv_id, user.id, text)
 
                 # broadcast created message to group
-                payload = MessageSerializer(created).data
+                payload = await self._serialize_message(created.id)
                 await self.channel_layer.group_send(
                     self.group_name,
                     {"type": "chat_message", "message": payload}
@@ -126,9 +141,10 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
                 await self.send_json({"type": "message_sent", "message": payload})
 
                 # Send a typing indicator for the AI to the client(s)
+                # Send as separate event type, not as a chat message
                 await self.channel_layer.group_send(
                     self.group_name,
-                    {"type": "chat_message", "message": {"system": "ai_typing", "conversation_id": self.conv_id}}
+                    {"type": "ai_typing_indicator", "conversation_id": self.conv_id}
                 )
 
                 # spawn background task to generate AI reply off the event loop
@@ -161,6 +177,13 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
             pass
         # forward to client
         await self.send_json({"type": "message", "message": message})
+
+    async def ai_typing_indicator(self, event):
+        """
+        Handler for AI typing indicator events.
+        Send as separate type to client, not as a message.
+        """
+        await self.send_json({"type": "ai_typing"})
 
     # -------------------------
     # Background AI generation
@@ -203,4 +226,34 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         msg = Message.objects.create(conversation=conv, sender="user", text=text)
         return msg
 
+    @database_sync_to_async
+    def _serialize_message(self, message_id: int):
+        msg = (
+            Message.objects
+            .select_related("conversation")
+            .prefetch_related("attachments")
+            .get(pk=message_id)
+        )
+        return MessageSerializer(msg).data
+
  
+
+class AnonymousChatConsumer(AsyncJsonWebsocketConsumer):
+    async def connect(self):
+        self.group_name = "anonymous_room1"
+        await self.channel_layer.group_add(self.group_name, self.channel_name)
+        await self.accept()
+
+    async def disconnect(self, code):
+        await self.channel_layer.group_discard(self.group_name, self.channel_name)
+
+    async def receive_json(self, content, **kwargs):
+        # Dummy behavior for initial frontend integration testing
+        message = content.get("message", "No message provided")
+        
+        # A simple echo response 
+        await self.send_json({
+            "message": f"I hear you saying: {message}. How does that make you feel?",
+            "crisis": False,
+            "type": "ai_message"
+        })
