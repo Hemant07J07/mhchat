@@ -14,6 +14,7 @@ Django settings for mhchat_proj project.
 """
 
 import os
+import dj_database_url
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -122,8 +123,13 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "mhchat_proj.wsgi.application"
 
-# ------- Database (Postgres via env or fallback to sqlite) -------
-if os.environ.get("POSTGRES_DB"):
+# ------- Database (Render DATABASE_URL, Postgres via env, or sqlite fallback) -------
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+if DATABASE_URL:
+    DATABASES = {
+        "default": dj_database_url.parse(DATABASE_URL, conn_max_age=600)
+    }
+elif os.environ.get("POSTGRES_DB"):
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.postgresql",
