@@ -9,13 +9,15 @@ https://docs.djangoproject.com/en/5.2/howto/deployment/asgi/
 
 # mhchat_proj/asgi.py
 import os
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "mhchat_proj.settings")
+
 from django.core.asgi import get_asgi_application
 from channels.routing import ProtocolTypeRouter, URLRouter
 from channels.auth import AuthMiddlewareStack
 import chat.routing
 from chat.jwt_auth import JwtAuthMiddleware
 
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'mhchat_proj.settings')
 django_asgi_app = get_asgi_application()
 
 application = ProtocolTypeRouter({
